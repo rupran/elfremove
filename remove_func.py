@@ -21,6 +21,10 @@ def process_file(filename, func_name):
     # TODO check for object-type
         elffile = ELFFile(f)
 
+        # check for supported architecture
+        if(elffile.header['e_machine'] != 'EM_X86_64' and elffile.header['e_machine'] != 'EM_386'):
+            error_message("Unsupported architecture: " + elffile.header['e_machine'])
+
         sect_no = -1
         for sect in elffile.iter_sections():
             sect_no += 1
