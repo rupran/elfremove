@@ -23,6 +23,7 @@ def edit_gnu_hashtable(func_name, elffile, f, dynsym_nr, total_ent_sym):
     # TODO 32-Bit
     ### Find Gnu-Hash Section ###
     # TODO search section only once in main!
+    # TODO change section size in header?
     for sect in elffile.iter_sections():
         if sect.name == '.gnu.hash':
             print('Found section at: ', sect.header['sh_offset'])
@@ -48,13 +49,13 @@ def edit_gnu_hashtable(func_name, elffile, f, dynsym_nr, total_ent_sym):
             bucket_offset = sect.header['sh_offset'] + 4 * 4 + bloomsize * 8
 
             ### Set new Bucket start values ###
-            for cur_bucket in range(bucket_nr, nbuckets):
-                f.seek(bucket_offset + cur_bucket * 4)
+            for cur_bucket in range(bucket_nr, nbuckets - 1):
+                f.seek(bucket_offset + (cur_bucket + 1) * 4)
                 bucket_start_b = f.read(4)
                 print('Start of Bucket', cur_bucket, int.from_bytes(bucket_start_b, sys.byteorder, signed=False))
                 bucket_start = int.from_bytes(bucket_start_b, sys.byteorder, signed=False)
                 bucket_start -= 1
-                f.seek(bucket_offset + cur_bucket * 4)
+                f.seek(bucket_offset + (cur_bucket + 1) * 4)
                 f.write(bucket_start.to_bytes(4, sys.byteorder))
 
             ### remove deletet entry from bucket ###
