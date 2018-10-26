@@ -12,6 +12,86 @@ def error_message(message):
     print('Something went wrong! ', message)
     exit()
 
+def gnuhash(func_name):
+    h = 5381
+    for c in func_name:
+        h = (h << 5) + h + ord(c)
+        h = h & 0xFFFFFFFF
+    return h
+
+def edit_gnu_hashtable(func_name, elffile, f, dynsym_nr, total_ent_sym):
+    # TODO 32-Bit
+    ### Find Gnu-Hash Section ###
+    # TODO search section only once in main!
+    for sect in elffile.iter_sections():
+        if sect.name == '.gnu.hash':
+            print('Found section at: ', sect.header['sh_offset'])
+            f.seek(sect.header['sh_offset'])
+            nbuckets_b = f.read(4)
+            symoffset_b = f.read(4)
+            bloomsize_b = f.read(4)
+            bloomshift_b = f.read(4)
+
+            nbuckets = int.from_bytes(nbuckets_b, sys.byteorder, signed=False)
+            symoffset = int.from_bytes(symoffset_b, sys.byteorder, signed=False)
+            bloomsize = int.from_bytes(bloomsize_b, sys.byteorder, signed=False)
+            bloomshift = int.from_bytes(bloomshift_b, sys.byteorder, signed=False)
+
+            bloom_hex = f.read(bloomsize * 8)
+            print("Buckets:", nbuckets, symoffset, bloomsize, bloomshift, bloom_hex)
+
+            ### calculate hash and bucket ###
+            func_hash = gnuhash(func_name)
+            bucket_nr = func_hash % nbuckets
+            print("Func: ", func_name, 'Hash:', hex(func_hash), 'Bucket:', bucket_nr)
+
+            bucket_offset = sect.header['sh_offset'] + 4 * 4 + bloomsize * 8
+
+            ### Set new Bucket start values ###
+            for cur_bucket in range(bucket_nr, nbuckets):
+                f.seek(bucket_offset + cur_bucket * 4)
+                bucket_start_b = f.read(4)
+                print('Start of Bucket', cur_bucket, int.from_bytes(bucket_start_b, sys.byteorder, signed=False))
+                bucket_start = int.from_bytes(bucket_start_b, sys.byteorder, signed=False)
+                bucket_start -= 1
+                f.seek(bucket_offset + cur_bucket * 4)
+                f.write(bucket_start.to_bytes(4, sys.byteorder))
+
+            ### remove deletet entry from bucket ###
+            # check hash
+            sym_nr = dynsym_nr - symoffset
+            f.seek(bucket_offset + nbuckets * 4 + sym_nr * 4)
+            bucket_hash_b = f.read(4)
+            bucket_hash = int.from_bytes(bucket_hash_b, sys.byteorder, signed=False)
+            if((bucket_hash & ~0x1) != (func_hash & ~0x1)):
+                print('Sth extremly terrible went wrong!!! OH NOOOOO!!!!')
+                print('calculated hash:', hex(func_hash), 'read hash:', hex(bucket_hash))
+                print('Sym_nr:', sym_nr, symtab_nr, symoffset)
+
+            # copy all entrys afterwards up by one
+            total_ent = total_ent_sym - symoffset
+            for cur_hash_off in range(sym_nr, total_ent):
+                f.seek(bucket_offset + nbuckets * 4 + (cur_hash_off + 1) * 4)
+                cur_hash_b = f.read(4)
+                f.seek(bucket_offset + nbuckets * 4 + cur_hash_off * 4)
+                f.write(cur_hash_b)
+
+            # remove double last value
+            f.seek(bucket_offset + nbuckets * 4 + total_ent * 4)
+            for count in range(0, 4):
+                f.write(chr(0x0).encode('ascii'))
+
+            # if last bit is set, set it at the value before
+            if((bucket_hash & ~1) == 1 and sym_nr != 0):
+                f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
+                new_tail_b = f.read(4)
+                new_tail = int.from_bytes(new_tail_b, sys.byteorder, signed=False)
+                # set with 'or' if already set
+                new_tail = new_tail ^ 0x00000001
+                f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
+                f.write(new_tail.to_bytes(4, sys.byteorder))
+
+
 def process_file(filename, func_name):
     start_addr = 0
     size = 0
@@ -20,7 +100,6 @@ def process_file(filename, func_name):
     with open(filename, 'r+b') as f:
     # TODO check for object-type
         elffile = ELFFile(f)
-
         # check for supported architecture
         if(elffile.header['e_machine'] != 'EM_X86_64' and elffile.header['e_machine'] != 'EM_386'):
             error_message("Unsupported architecture: " + elffile.header['e_machine'])
@@ -58,6 +137,11 @@ def process_file(filename, func_name):
             #### Overwrite Symbol Table entry ####
             # if function was found
             max_entrys = (sect.header['sh_size'] // sect.header['sh_entsize'])
+
+            # TODO call only for dynsym and if '.gnu.hash' section exists and symbol was found
+            if(sect.name == '.dynsym'):
+                edit_gnu_hashtable(func_name, elffile, f, entry_cnt, max_entrys)
+
             if entry_cnt != max_entrys:
                 print('    Deleting Table Entry')
 
