@@ -26,25 +26,24 @@ def edit_gnu_hashtable(func_name, elffile, f, dynsym_nr, total_ent_sym):
     # TODO change section size in header?
     for sect in elffile.iter_sections():
         if sect.name == '.gnu.hash':
-            print('Found section at: ', sect.header['sh_offset'])
+            print('    Found \'GNU_HASH\' section!')
             f.seek(sect.header['sh_offset'])
             nbuckets_b = f.read(4)
             symoffset_b = f.read(4)
             bloomsize_b = f.read(4)
-            bloomshift_b = f.read(4)
+            #bloomshift_b = f.read(4)
 
             nbuckets = int.from_bytes(nbuckets_b, sys.byteorder, signed=False)
             symoffset = int.from_bytes(symoffset_b, sys.byteorder, signed=False)
             bloomsize = int.from_bytes(bloomsize_b, sys.byteorder, signed=False)
-            bloomshift = int.from_bytes(bloomshift_b, sys.byteorder, signed=False)
+            #bloomshift = int.from_bytes(bloomshift_b, sys.byteorder, signed=False)
 
-            bloom_hex = f.read(bloomsize * 8)
-            print("Buckets:", nbuckets, symoffset, bloomsize, bloomshift, bloom_hex)
+            #bloom_hex = f.read(bloomsize * 8)
 
             ### calculate hash and bucket ###
             func_hash = gnuhash(func_name)
             bucket_nr = func_hash % nbuckets
-            print("Func: ", func_name, 'Hash:', hex(func_hash), 'Bucket:', bucket_nr)
+            print("    Func:", func_name, 'Hash:', hex(func_hash), 'Bucket:', bucket_nr)
 
             bucket_offset = sect.header['sh_offset'] + 4 * 4 + bloomsize * 8
 
@@ -52,7 +51,6 @@ def edit_gnu_hashtable(func_name, elffile, f, dynsym_nr, total_ent_sym):
             for cur_bucket in range(bucket_nr, nbuckets - 1):
                 f.seek(bucket_offset + (cur_bucket + 1) * 4)
                 bucket_start_b = f.read(4)
-                print('Start of Bucket', cur_bucket, int.from_bytes(bucket_start_b, sys.byteorder, signed=False))
                 bucket_start = int.from_bytes(bucket_start_b, sys.byteorder, signed=False)
                 bucket_start -= 1
                 f.seek(bucket_offset + (cur_bucket + 1) * 4)
@@ -64,10 +62,13 @@ def edit_gnu_hashtable(func_name, elffile, f, dynsym_nr, total_ent_sym):
             f.seek(bucket_offset + nbuckets * 4 + sym_nr * 4)
             bucket_hash_b = f.read(4)
             bucket_hash = int.from_bytes(bucket_hash_b, sys.byteorder, signed=False)
+
+            # if this happens, sth on the library or hash function is broken!
             if((bucket_hash & ~0x1) != (func_hash & ~0x1)):
                 print('Sth extremly terrible went wrong!!! OH NOOOOO!!!!')
                 print('calculated hash:', hex(func_hash), 'read hash:', hex(bucket_hash))
-                print('Sym_nr:', sym_nr, symtab_nr, symoffset)
+                print('Library might be broken now!')
+                exit()
 
             # copy all entrys afterwards up by one
             total_ent = total_ent_sym - symoffset
@@ -83,6 +84,7 @@ def edit_gnu_hashtable(func_name, elffile, f, dynsym_nr, total_ent_sym):
                 f.write(chr(0x0).encode('ascii'))
 
             # if last bit is set, set it at the value before
+            # TODO test with new library with edge cases
             if((bucket_hash & 0x1) == 1 and sym_nr != 0):
                 f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
                 new_tail_b = f.read(4)
