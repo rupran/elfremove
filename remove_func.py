@@ -83,7 +83,7 @@ def edit_gnu_hashtable(func_name, elffile, f, dynsym_nr, total_ent_sym):
                 f.write(chr(0x0).encode('ascii'))
 
             # if last bit is set, set it at the value before
-            if((bucket_hash & ~1) == 1 and sym_nr != 0):
+            if((bucket_hash & 0x1) == 1 and sym_nr != 0):
                 f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
                 new_tail_b = f.read(4)
                 new_tail = int.from_bytes(new_tail_b, sys.byteorder, signed=False)
