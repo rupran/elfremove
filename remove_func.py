@@ -11,6 +11,7 @@ from elftools.elf.sections import StringTableSection
 from elftools.elf.sections import SymbolTableSection
 
 gnu_hash_section = 0
+gnu_hash_section_no = 0
 
 def error_message(message):
     print('Something went wrong! ', message)
@@ -23,11 +24,36 @@ def gnuhash(func_name):
         h = h & 0xFFFFFFFF
     return h
 
+def change_section_size(f, elffile, section, section_no, entry_size):
+    head_entsize = elffile['e_shentsize']
+    off_to_head = elffile['e_shoff'] + (head_entsize * section_no)
+    if(elffile.header['e_machine'] == 'EM_X86_64'):
+        # 64 Bit - seek to current section header + offset to size of section
+        f.seek(off_to_head + 32)
+        size_bytes = f.read(8)
+        value = int.from_bytes(size_bytes, sys.byteorder, signed=False)
+        value -= entry_size
+        if value < entry_size:
+            error_message('Size of section broken')
+        f.seek(off_to_head + 32)
+        f.write(value.to_bytes(8, sys.byteorder))
+    elif(elffile.header['e_machine'] == 'EM_386'):
+        # TODO test 32 Bit
+        f.seek(off_to_head + 20)
+        size_bytes = f.read(4)
+        value = int.from_bytes(size_bytes, sys.byteorder, signed=False)
+        value -= entry_size
+        if value <= entry_size:
+            error_message('Size of section broken')
+        f.seek(off_to_head + 20)
+        f.write(value.to_bytes(4, sys.byteorder))
+
 def edit_gnu_hashtable(func_name, elffile, f, dynsym_nr, total_ent_sym):
     # TODO 32-Bit
     ### Find Gnu-Hash Section ###
-    # TODO change section size in header?
     global gnu_hash_section
+    global gnu_hash_section_no
+
     if(gnu_hash_section != -1):
         f.seek(gnu_hash_section.header['sh_offset'])
         nbuckets_b = f.read(4)
@@ -96,6 +122,8 @@ def edit_gnu_hashtable(func_name, elffile, f, dynsym_nr, total_ent_sym):
             f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
             f.write(new_tail.to_bytes(4, sys.byteorder))
 
+        # change section size in header
+        change_section_size(f, elffile, gnu_hash_section, gnu_hash_section_no, 4)
 
 def process_file(filename, func_name):
     start_addr = 0
@@ -106,12 +134,13 @@ def process_file(filename, func_name):
         # TODO check for object-type
         elffile = ELFFile(f)
 
-        # check for supported architecture
+        #### check for supported architecture ####
         if(elffile.header['e_machine'] != 'EM_X86_64' and elffile.header['e_machine'] != 'EM_386'):
             error_message("Unsupported architecture: " + elffile.header['e_machine'])
 
-        # find gnu_hash_section
+        #### find gnu_hash_section ####
         global gnu_hash_section
+        global gnu_hash_section_no
         if(gnu_hash_section == 0):
             found = 0
             for sect in elffile.iter_sections():
@@ -119,6 +148,8 @@ def process_file(filename, func_name):
                     print('    Found \'GNU_HASH\' section!')
                     gnu_hash_section = sect
                     found = 1
+                    break
+                gnu_hash_section_no += 1
             # gnu hash section not available -> dont search again
             if(found == 0):
                 gnu_hash_section = -1
@@ -178,31 +209,7 @@ def process_file(filename, func_name):
                     f.write(chr(0x0).encode('ascii'))
 
                 # set new table size in header
-                head_entsize = elffile['e_shentsize']
-                off_to_head = elffile['e_shoff'] + (head_entsize * sect_no)
-
-                if(elffile.header['e_machine'] == 'EM_X86_64'):
-                    # 64 Bit - seek to current section header + offset to size of section
-                    f.seek(off_to_head + 32)
-                    size_bytes = f.read(8)
-                    value = int.from_bytes(size_bytes, sys.byteorder, signed=False)
-                    value -= sect.header['sh_entsize']
-                    if value < sect.header['sh_entsize']:
-                        error_message('Size of section')
-                    f.seek(off_to_head + 32)
-                    f.write(value.to_bytes(8, sys.byteorder))
-                elif(elffile.header['e_machine'] == 'EM_386'):
-                    # TODO test 32 Bit
-                    f.seek(off_to_head + 20)
-                    size_bytes = f.read(4)
-                    value = int.from_bytes(size_bytes, sys.byteorder, signed=False)
-                    value -= sect.header['sh_entsize']
-                    if value <= sect.header['sh_entsize']:
-                        error_message('Size of section strange')
-                    f.seek(off_to_head + 20)
-                    f.write(value.to_bytes(4, sys.byteorder))
-                else:
-                    error_message('Unsupported architecture: ' + elffile.header['e_machine'] + '!')
+                change_section_size(f, elffile, sect, sect_no, sect.header['sh_entsize'])
 
 #                #### Temporary: set entry to 0x0 and type to weak ####
 #                # (temporary) set table entry to 0x0
