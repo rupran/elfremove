@@ -23,15 +23,17 @@ class ELFRemove:
         self._debug = debug
         self._f = open(filename, 'r+b')
         self._elffile = ELFFile(self._f)
-        self._gnu_hash = (None, 0)
+        self._gnu_hash = None
         self.dynsym = None
         self.symtab = None
+        self._gnu_version = None
 
         #### check for supported architecture ####
         if(self._elffile.header['e_machine'] != 'EM_X86_64' and self._elffile.header['e_machine'] != 'EM_386'):
             raise Exception('Wrong Architecture!')
 
         section_no = 0
+        # search for needed sections and remember (Section-Object, Section Nr., Version Counter)
         for sect in self._elffile.iter_sections():
             if(sect.name == '.gnu.hash'):
                 self._log('    Found \'GNU_HASH\' section!')
@@ -42,6 +44,9 @@ class ELFRemove:
             if(sect.name == '.symtab'):
                 self._log('    Found \'SYMTAB\' section!')
                 self.symtab = (sect, section_no, 0)
+            if(sect.name == '.gnu.version'):
+                self._log('    Found \'GNU_VERSION\' section!')
+                self._gnu_version = (sect, section_no, 0)
             section_no += 1
         if(self.dynsym == None and self.symtab == None):
             raise Exception("No symbol table found!")
@@ -92,6 +97,34 @@ class ELFRemove:
             self._f.write(value.to_bytes(4, sys.byteorder))
 
     '''
+    Function:   _edit_gnu_versions
+    Parameter:  dynsym_nr       = nr of the given symbol in the dynsym table
+                total_sym_count = total entries of th dynsym section
+
+    Description: removes the given offset from the 'gnu.version' section
+    '''
+    def _edit_gnu_versions(self, dynsym_nr, total_sym_cnt):
+        # should be the same for 32-Bit
+        if(self._gnu_version != None):
+            ent_size = 2 # 2 Bytes for each entry (Elf32_half & Elf64_half)
+            offset = self._gnu_version[0].header['sh_offset']
+
+            # copy all following entries up by one
+            for cur_ent in range(dynsym_nr, total_sym_cnt):
+                self._f.seek(offset + (cur_ent + 1) * ent_size)
+                cur_ent_b = self._f.read(ent_size)
+                self._f.seek(offset + cur_ent * ent_size)
+                self._f.write(cur_ent_b)
+
+            # remove double last value
+            self._f.seek(offset + (total_sym_cnt - 1) * ent_size)
+            for count in range(0, ent_size):
+                self._f.write(chr(0x0).encode('ascii'))
+
+            # change section size in header
+            self._change_section_size(self._gnu_version, ent_size)
+
+    '''
     Function:   _edit_gnu_hashtable
     Parameter:  symbol_name   = name of the Symbol to be removed
                 dynsym_nr     = nr of the given symbol in the dynsym table
@@ -101,8 +134,7 @@ class ELFRemove:
     '''
     def _edit_gnu_hashtable(self, symbol_name, dynsym_nr, total_ent_sym):
         # TODO 32-Bit
-
-        if(self._gnu_hash[0] != None):
+        if(self._gnu_hash != None):
             self._f.seek(self._gnu_hash[0].header['sh_offset'])
             nbuckets_b = self._f.read(4)
             symoffset_b = self._f.read(4)
@@ -133,7 +165,6 @@ class ELFRemove:
                     continue
                 bucket_start -= 1
                 self._f.seek(bucket_offset + (cur_bucket + 1) * 4)
-                self._log('Bucket start: ' + str(bucket_start) + ' bucket_nr: ' + str(cur_bucket))
                 self._f.write(bucket_start.to_bytes(4, sys.byteorder))
 
             ### remove deletet entry from bucket ###
@@ -205,6 +236,7 @@ class ELFRemove:
             # edit gnu_hash table but only for dynsym section
             if(section[0].name == '.dynsym'):
                 self._edit_gnu_hashtable(symbol_t[0], symbol_t[1], max_entrys)
+                self._edit_gnu_versions(symbol_t[1], max_entrys)
 
             self._log('\t' + symbol_t[0] + ': deleting table entry')
 
@@ -245,7 +277,7 @@ class ELFRemove:
 
     Description: removes the symbols from the given section
     '''
-    def collect_symbols(self, section, symbol_list, complement=False):
+    def collect_symbols_by_name(self, section, symbol_list, complement=False):
         self._log('Searching in section: ' + section[0].name)
 
         #### Search for function in Symbol Table ####
@@ -274,13 +306,42 @@ class ELFRemove:
                     found_symbols.append((symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section[2]))
         return found_symbols
 
+    def collect_symbols_by_address(self, section, address_list, complement=False):
+        self._log('Searching in section: ' + section[0].name)
+
+        #### Search for function in Symbol Table ####
+        entry_cnt = -1
+        found_symbols = []
+
+        for symbol in section[0].iter_symbols():
+            entry_cnt += 1
+            if(complement):
+                if symbol.entry['st_value'] not in address_list:
+                    size = symbol.entry['st_size']
+                    # Symbol not a function -> next
+                    if(symbol['st_info']['type'] != 'STT_FUNC' or size == 0):
+                        continue
+                    # add all symbols to remove to the return list
+                    # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
+                    found_symbols.append((symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section[2]))
+            else:
+                if symbol.entry['st_value'] in address_list:
+                    size = symbol.entry['st_size']
+                    # Symbol not a function -> next
+                    if(symbol['st_info']['type'] != 'STT_FUNC' or size == 0):
+                        continue
+                    # add all symbols to remove to the return list
+                    # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
+                    found_symbols.append((symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section[2]))
+        return found_symbols
+
     def print_collection_info(self, collection, full=True):
         if(full):
             print('Symbols in collection: ' + str(len(collection)))
             print('Name\t\t| Offset | Start Addr   | Size  | Revision')
             print('-----------------------------------------------------------')
             for sym in collection:
-                print(sym[0] + '\t\t| ' + str(sym[1]) + '\t | ' + str(hex(sym[2])) + '\t| ' + str(hex(sym[3])) + '\t| ' + str(sym[4]))
+                print(sym[0] + '\t\t| ' + str(sym[1]) + '\t | ' + str(sym[2]) + '\t| ' + str(hex(sym[3])) + '\t| ' + str(sym[4]))
         else:
             for sym in collection:
                 print(sym[0] + " ", end="", flush=True)
