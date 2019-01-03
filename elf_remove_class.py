@@ -2,6 +2,7 @@
 
 import sys
 import binascii
+import struct
 
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import NoteSection
@@ -47,6 +48,9 @@ class ELFRemove:
             if(sect.name == '.gnu.version'):
                 self._log('    Found \'GNU_VERSION\' section!')
                 self._gnu_version = (sect, section_no, 0)
+            if(sect.name == '.rel.plt' or sect.name == '.rela.plt'):
+                self._log('    Found \'RELA_PLT\' section!')
+                self._rel_plt = (sect, section_no, 0)
             section_no += 1
         if(self.dynsym == None and self.symtab == None):
             raise Exception("No symbol table found!")
@@ -86,7 +90,7 @@ class ELFRemove:
             self._f.seek(off_to_head + 32)
             self._f.write(value.to_bytes(8, sys.byteorder))
         elif(self._elffile.header['e_machine'] == 'EM_386'):
-            # TODO test 32 Bit
+            # 32 Bit
             self._f.seek(off_to_head + 20)
             size_bytes = self._f.read(4)
             value = int.from_bytes(size_bytes, sys.byteorder, signed=False)
@@ -95,6 +99,73 @@ class ELFRemove:
                 raise Exception('Size of section broken')
             self._f.seek(off_to_head + 20)
             self._f.write(value.to_bytes(4, sys.byteorder))
+
+    def _edit_rel_plt(self, sym_nr):
+        if(self._rel_plt != None):
+            ent_size = 0
+            ent_cnt = 0
+            total_entries = self._rel_plt[0].num_relocations()
+            offset = self._rel_plt[0].header['sh_offset']
+            to_remove = -1
+
+            if(self._elffile.header['e_machine'] == 'EM_X86_64'):
+                ent_size = 24 # Elf64_rela struct size, x64 always rela?
+            else:
+                ent_size = 8 # Elf32_rel struct size, x86 always rel
+
+            for reloc in self._rel_plt[0].iter_relocations():
+                #print("Reloc: (%s)" % 'RELA' if reloc.is_RELA() else 'REL')
+                
+                # case: delete entry
+                if(reloc['r_info_sym'] == sym_nr):
+                    #print("Reloc offset: " + str(reloc['r_offset']) + " type: " + str(reloc['r_info_type']) + " sym: " + str(reloc['r_info_sym']))
+                    if(to_remove != -1):
+                        raise Exception("double value in rel.plt")
+                    to_remove = ent_cnt
+
+                # case: entry_num > removed_entry -> count down sym_nr by 1
+                elif(reloc['r_info_sym'] > sym_nr):
+                    self._f.seek(offset + ent_cnt * ent_size)
+                    cur_ent_b = self._f.read(ent_size)
+                    if(ent_size == 8):
+                        addr, info = struct.unpack('<Ii', cur_ent_b)
+                        old_sym = info >> 8
+                        old_sym -= 1
+                        info = (old_sym << 8) + (info & 0xFF)
+                        cur_ent_b = struct.pack('<Ii', addr, info)
+                    else:
+                        addr, info, addent = struct.unpack('<QqQ', cur_ent_b)
+                        old_sym = info >> 32
+                        old_sym -= 1
+                        info = (old_sym << 32) + (info & 0xFFFFFFFF)
+                        cur_ent_b = struct.pack('<QqQ', addr, info, addent)
+
+                    self._f.seek(offset + ent_cnt * ent_size)
+                    self._f.write(cur_ent_b)
+                ent_cnt += 1
+           
+            if(to_remove != -1):
+                for cur_ent in range(to_remove, total_entries):
+                    self._f.seek(offset + (cur_ent + 1) * ent_size)
+                    cur_ent_b = self._f.read(ent_size)
+                    
+                    addr, info = struct.unpack('<Ii', cur_ent_b)
+                    old_sym = info >> 8
+                    print("Read value: " + str(old_sym))
+                    
+                    self._f.seek(offset + cur_ent * ent_size)
+                    self._f.write(cur_ent_b)
+                #self._f.seek(offset + (ent_cnt + 1) * ent_size)
+                #cur_ent_b = self._f.read(ent_size)
+                #self._f.seek(offset + ent_cnt * ent_size)
+                #self._f.write(cur_ent_b)
+
+                # remove double last value
+                self._f.seek(offset + (total_entries - 1) * ent_size)
+                for count in range(0, ent_size):
+                    self._f.write(chr(0x0).encode('ascii'))
+                self._change_section_size(self._rel_plt, ent_size)
+
 
     '''
     Function:   _edit_gnu_versions
@@ -133,8 +204,11 @@ class ELFRemove:
     Description: removes the given Symbol from the 'gnu.hash' section
     '''
     def _edit_gnu_hashtable(self, symbol_name, dynsym_nr, total_ent_sym):
-        # TODO 32-Bit
         if(self._gnu_hash != None):
+            bloom_entry = 8
+            if(self._elffile.header['e_machine'] == 'EM_386'):
+                bloom_entry = 4
+
             self._f.seek(self._gnu_hash[0].header['sh_offset'])
             nbuckets_b = self._f.read(4)
             symoffset_b = self._f.read(4)
@@ -153,7 +227,7 @@ class ELFRemove:
             bucket_nr = func_hash % nbuckets
             self._log("\t" + symbol_name + ': adjust gnu_hash_section, hash = ' + hex(func_hash) + ' bucket = ' + str(bucket_nr))
 
-            bucket_offset = self._gnu_hash[0].header['sh_offset'] + 4 * 4 + bloomsize * 8
+            bucket_offset = self._gnu_hash[0].header['sh_offset'] + 4 * 4 + bloomsize * bloom_entry
 
             ### Set new Bucket start values ###
             for cur_bucket in range(bucket_nr, nbuckets - 1):
@@ -233,10 +307,11 @@ class ELFRemove:
             if(symbol_t[4] != section[2]):
                 raise Exception('symbol_collection was generated for older revision of ' + section[0].name)
             #### Overwrite Symbol Table entry ####
-            # edit gnu_hash table but only for dynsym section
+            # edit gnu_hash table, gnu_versions and relocation table but only for dynsym section
             if(section[0].name == '.dynsym'):
                 self._edit_gnu_hashtable(symbol_t[0], symbol_t[1], max_entrys)
                 self._edit_gnu_versions(symbol_t[1], max_entrys)
+                self._edit_rel_plt(symbol_t[1])
 
             self._log('\t' + symbol_t[0] + ': deleting table entry')
 
@@ -259,6 +334,7 @@ class ELFRemove:
                     self._f.seek(symbol_t[2])
                     for count in range(0, symbol_t[3]):
                         self._f.write(chr(0x0).encode('ascii'))
+                        #pass
             removed += 1;
             max_entrys -= 1
 
@@ -267,7 +343,7 @@ class ELFRemove:
         return removed
 
     '''
-    Function:   collect_symbols
+    Function:   collect_symbols_by_name
     Parameter:  section     = symbol table to search in (self.symtab, self.dynsym)
                 symbol_list = list of symbol names to be collected
                 complement  = Boolean, True: all symbols except given list are collected

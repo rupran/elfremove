@@ -1,17 +1,31 @@
 #!/usr/bin/python3
-
-from elf_remove_class import ELFRemove
 import sys
+import os
 
-def proc(filename, functions):
+sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), '../librarytrader'))
+
+from librarytrader.librarystore import LibraryStore
+from elf_remove_class import ELFRemove
+
+def proc(filename):
     elf_rem = ELFRemove(filename, True)
-
+    
     if(elf_rem.dynsym == None):
         print('dynsym table not found in File!')
         sys.exit(1)
 
+    # get all unused symbol addresses
+    addr = []
+    store = LibraryStore()
+    store.load("../curl.json")
+    for key in store["/usr/lib/i386-linux-gnu/libcurl.so.4.5.0"].exported_addrs.keys():
+        value = store["/usr/lib/i386-linux-gnu/libcurl.so.4.5.0"].export_users[key]
+        if not value:
+            addr.append(key)
+
+
     # collect the complementary set of Symbols for given function names
-    collection_dynsym = elf_rem.collect_symbols_by_name(elf_rem.dynsym, functions)
+    collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, addr)
     if(elf_rem.symtab != None):
         collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab, elf_rem.get_collection_names(collection_dynsym))
 
@@ -29,7 +43,7 @@ def proc(filename, functions):
             elf_rem.remove_from_section(elf_rem.symtab, collection_symtab, False)
 
 if __name__ == '__main__':
-    if(len(sys.argv) < 3):
-        print('Usage: python3 remove_tool.py <library> <func1> ... <funcN>')
+    if(len(sys.argv) != 2):
+        print('Usage: python3 remove_tool_libtrader.py <library>')
         sys.exit(1)
-    proc(sys.argv[1], sys.argv[2:])
+    proc(sys.argv[1])
