@@ -18,11 +18,20 @@ def proc(filename):
     addr = []
     store = LibraryStore()
     store.load("../curl.json")
-    for key in store["/usr/lib/x86_64-linux-gnu/libcurl.so.4.5.0"].exported_addrs.keys():
-        value = store["/usr/lib/x86_64-linux-gnu/libcurl.so.4.5.0"].export_users[key]
+    libobjs = store.get_library_objects()
+    print(str(len(libobjs)))
+    for lib in libobjs:
+        print(lib.fullname)
+
+#    for key in store["/usr/lib/x86_64-linux-gnu/libcurl.so.4.5.0"].exported_addrs.keys():
+#        value = store["/usr/lib/x86_64-linux-gnu/libcurl.so.4.5.0"].export_users[key]
+#        if not value:
+#            addr.append(key)
+
+    for key in store["/lib/x86_64-linux-gnu/libc-2.27.so"].exported_addrs.keys():
+        value = store["/lib/x86_64-linux-gnu/libc-2.27.so"].export_users[key]
         if not value:
             addr.append(key)
-
 
     # collect the complementary set of Symbols for given function names
     collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, addr)
@@ -30,7 +39,7 @@ def proc(filename):
         collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab, elf_rem.get_collection_names(collection_dynsym))
 
     print('Functions to remove from library dynsym:')
-    elf_rem.print_collection_info(collection_dynsym)
+    elf_rem.print_collection_info(collection_dynsym, False)
     if(elf_rem.symtab != None):
         print('\nFunctions to remove from library symtab:')
         elf_rem.print_collection_info(collection_symtab)

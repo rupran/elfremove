@@ -51,6 +51,9 @@ class ELFRemove:
             if(sect.name == '.rel.plt' or sect.name == '.rela.plt'):
                 self._log('    Found \'RELA_PLT\' section!')
                 self._rel_plt = (sect, section_no, 0)
+            if(sect.name == '.rel.dyn' or sect.name == '.rela.dyn'):
+                self._log('    Found \'RELA_DYN\' section!')
+                self._rel_dyn = (sect, section_no, 0)
             section_no += 1
         if(self.dynsym == None and self.symtab == None):
             raise Exception("No symbol table found!")
@@ -84,9 +87,9 @@ class ELFRemove:
             self._f.seek(off_to_head + 32)
             size_bytes = self._f.read(8)
             value = int.from_bytes(size_bytes, sys.byteorder, signed=False)
-            value -= size
             if value < size:
-                raise Exception('Size of section broken')
+                raise Exception('Size of section broken! Section: ' + section[0].name + ' Size: ' + value)
+            value -= size
             self._f.seek(off_to_head + 32)
             self._f.write(value.to_bytes(8, sys.byteorder))
         elif(self._elffile.header['e_machine'] == 'EM_386'):
@@ -94,11 +97,49 @@ class ELFRemove:
             self._f.seek(off_to_head + 20)
             size_bytes = self._f.read(4)
             value = int.from_bytes(size_bytes, sys.byteorder, signed=False)
-            value -= size
             if value <= size:
                 raise Exception('Size of section broken')
+            value -= size
             self._f.seek(off_to_head + 20)
             self._f.write(value.to_bytes(4, sys.byteorder))
+
+
+    def _edit_rel_dyn(self, sym_nr):
+        if(self._rel_dyn != None):
+            # TODO start from offset, not at 0!
+            ent_size = 0
+            ent_cnt = 0
+            total_entries = self._rel_dyn[0].num_relocations()
+            offset = self._rel_dyn[0].header['sh_offset']
+            to_remove = -1
+
+            if(self._elffile.header['e_machine'] == 'EM_X86_64'):
+                ent_size = 24 # Elf64_rela struct size, x64 always rela?
+            else:
+                ent_size = 8 # Elf32_rel struct size, x86 always rel
+
+            for reloc in self._rel_dyn[0].iter_relocations():
+                # case: entry_num > removed_entry -> count down sym_nr by 1
+                if(reloc['r_info_sym'] > sym_nr):
+                    self._f.seek(offset + ent_cnt * ent_size)
+                    cur_ent_b = self._f.read(ent_size)
+                    if(ent_size == 8):
+                        addr, info = struct.unpack('<Ii', cur_ent_b)
+                        old_sym = info >> 8
+                        old_sym -= 1
+                        info = (old_sym << 8) + (info & 0xFF)
+                        cur_ent_b = struct.pack('<Ii', addr, info)
+                    else:
+                        addr, info, addent = struct.unpack('<QqQ', cur_ent_b)
+                        old_sym = info >> 32
+                        old_sym -= 1
+                        info = (old_sym << 32) + (info & 0xFFFFFFFF)
+                        cur_ent_b = struct.pack('<QqQ', addr, info, addent)
+
+                    self._f.seek(offset + ent_cnt * ent_size)
+                    self._f.write(cur_ent_b)
+                ent_cnt += 1
+
 
     def _edit_rel_plt(self, sym_nr):
         if(self._rel_plt != None):
@@ -149,10 +190,6 @@ class ELFRemove:
                     self._f.seek(offset + (cur_ent + 1) * ent_size)
                     cur_ent_b = self._f.read(ent_size)
                     
-                    addr, info = struct.unpack('<Ii', cur_ent_b)
-                    old_sym = info >> 8
-                    print("Read value: " + str(old_sym))
-                    
                     self._f.seek(offset + cur_ent * ent_size)
                     self._f.write(cur_ent_b)
                 #self._f.seek(offset + (ent_cnt + 1) * ent_size)
@@ -163,7 +200,8 @@ class ELFRemove:
                 # remove double last value
                 self._f.seek(offset + (total_entries - 1) * ent_size)
                 for count in range(0, ent_size):
-                    self._f.write(chr(0x0).encode('ascii'))
+                    pass
+                    #self._f.write(chr(0x0).encode('ascii'))
                 self._change_section_size(self._rel_plt, ent_size)
 
 
@@ -312,6 +350,7 @@ class ELFRemove:
                 self._edit_gnu_hashtable(symbol_t[0], symbol_t[1], max_entrys)
                 self._edit_gnu_versions(symbol_t[1], max_entrys)
                 self._edit_rel_plt(symbol_t[1])
+                self._edit_rel_dyn(symbol_t[1])
 
             self._log('\t' + symbol_t[0] + ': deleting table entry')
 
