@@ -141,12 +141,12 @@ class ELFRemove:
                 ent_cnt += 1
 
 
-    def _edit_rel_plt(self, sym_nr):
-        if(self._rel_plt != None):
+    def _edit_rel_sect(self, section, sym_nr):
+        if(section != None):
             ent_size = 0
             ent_cnt = 0
-            total_entries = self._rel_plt[0].num_relocations()
-            offset = self._rel_plt[0].header['sh_offset']
+            total_entries = section[0].num_relocations()
+            offset = section[0].header['sh_offset']
             to_remove = -1
 
             if(self._elffile.header['e_machine'] == 'EM_X86_64'):
@@ -154,9 +154,8 @@ class ELFRemove:
             else:
                 ent_size = 8 # Elf32_rel struct size, x86 always rel
 
-            for reloc in self._rel_plt[0].iter_relocations():
+            for reloc in section[0].iter_relocations():
                 #print("Reloc: (%s)" % 'RELA' if reloc.is_RELA() else 'REL')
-                
                 # case: delete entry
                 if(reloc['r_info_sym'] == sym_nr):
                     #print("Reloc offset: " + str(reloc['r_offset']) + " type: " + str(reloc['r_info_type']) + " sym: " + str(reloc['r_info_sym']))
@@ -184,25 +183,46 @@ class ELFRemove:
                     self._f.seek(offset + ent_cnt * ent_size)
                     self._f.write(cur_ent_b)
                 ent_cnt += 1
-           
+
             if(to_remove != -1):
-                for cur_ent in range(to_remove, total_entries):
-                    self._f.seek(offset + (cur_ent + 1) * ent_size)
-                    cur_ent_b = self._f.read(ent_size)
-                    
-                    self._f.seek(offset + cur_ent * ent_size)
-                    self._f.write(cur_ent_b)
+                # TODO lib breaks when entries get displaced
+                #for cur_ent in range(to_remove, total_entries - 1):
+                #    self._f.seek(offset + (cur_ent + 1) * ent_size)
+                #    cur_ent_b = self._f.read(ent_size)
+                #    self._f.seek(offset + cur_ent * ent_size)
+                #    self._f.write(cur_ent_b)
+
                 #self._f.seek(offset + (ent_cnt + 1) * ent_size)
                 #cur_ent_b = self._f.read(ent_size)
                 #self._f.seek(offset + ent_cnt * ent_size)
                 #self._f.write(cur_ent_b)
 
                 # remove double last value
-                self._f.seek(offset + (total_entries - 1) * ent_size)
-                for count in range(0, ent_size):
-                    pass
-                    #self._f.write(chr(0x0).encode('ascii'))
-                self._change_section_size(self._rel_plt, ent_size)
+                #self._f.seek(offset + (total_entries - 1) * ent_size)
+                #for count in range(0, ent_size):
+                #    pass
+                #   # TODO lib breaks when deletet entry overriden! header size?
+                #   #self._f.write(chr(0x0).encode('ascii'))
+                #self._change_section_size(self._rel_plt, ent_size)
+
+                # TODO temporary: set a placeholder entry with dynsym offset 1
+                self._f.seek(offset + to_remove * ent_size)
+                cur_ent_b = self._f.read(ent_size)
+                if(ent_size == 8):
+                    addr, info = struct.unpack('<Ii', cur_ent_b)
+                    old_sym = info >> 8
+                    old_sym = 0
+                    info = (old_sym << 8) + (info & 0xFF)
+                    cur_ent_b = struct.pack('<Ii', addr, info)
+                else:
+                    addr, info, addent = struct.unpack('<QqQ', cur_ent_b)
+                    old_sym = info >> 32
+                    old_sym = 0
+                    info = (old_sym << 32) + (info & 0xFFFFFFFF)
+                    cur_ent_b = struct.pack('<QqQ', addr, info, addent)
+
+                self._f.seek(offset + to_remove * ent_size)
+                self._f.write(cur_ent_b)
 
 
     '''
@@ -349,8 +369,8 @@ class ELFRemove:
             if(section[0].name == '.dynsym'):
                 self._edit_gnu_hashtable(symbol_t[0], symbol_t[1], max_entrys)
                 self._edit_gnu_versions(symbol_t[1], max_entrys)
-                self._edit_rel_plt(symbol_t[1])
-                self._edit_rel_dyn(symbol_t[1])
+                self._edit_rel_sect(self._rel_plt, symbol_t[1])
+                self._edit_rel_sect(self._rel_dyn, symbol_t[1])
 
             self._log('\t' + symbol_t[0] + ': deleting table entry')
 
@@ -402,19 +422,19 @@ class ELFRemove:
         for symbol in section[0].iter_symbols():
             entry_cnt += 1
             if(complement):
-                if symbol.name not in symbol_list:
+                if(symbol.name not in symbol_list):
                     size = symbol.entry['st_size']
                     # Symbol not a function -> next
-                    if(symbol['st_info']['type'] != 'STT_FUNC' or size == 0):
+                    if(symbol['st_info']['type'] != 'STT_FUNC' or symbol['st_info']['bind'] == 'STB_WEAK' or size == 0):
                         continue
                     # add all symbols to remove to the return list
                     # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
                     found_symbols.append((symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section[2]))
             else:
-                if symbol.name in symbol_list:
+                if(symbol.name in symbol_list):
                     size = symbol.entry['st_size']
                     # Symbol not a function -> next
-                    if(symbol['st_info']['type'] != 'STT_FUNC' or size == 0):
+                    if(symbol['st_info']['type'] != 'STT_FUNC' or symbol['st_info']['bind'] == 'STB_WEAK' or size == 0):
                         continue
                     # add all symbols to remove to the return list
                     # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
@@ -431,36 +451,65 @@ class ELFRemove:
         for symbol in section[0].iter_symbols():
             entry_cnt += 1
             if(complement):
-                if symbol.entry['st_value'] not in address_list:
+                if(symbol.entry['st_value'] not in address_list):
                     size = symbol.entry['st_size']
                     # Symbol not a function -> next
-                    if(symbol['st_info']['type'] != 'STT_FUNC' or size == 0):
+                    if(symbol['st_info']['type'] != 'STT_FUNC' or symbol['st_info']['bind'] == 'STB_WEAK' or size == 0):
                         continue
                     # add all symbols to remove to the return list
                     # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
                     found_symbols.append((symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section[2]))
             else:
-                if symbol.entry['st_value'] in address_list:
+                if(symbol.entry['st_value'] in address_list):
                     size = symbol.entry['st_size']
                     # Symbol not a function -> next
-                    if(symbol['st_info']['type'] != 'STT_FUNC' or size == 0):
+                    if(symbol['st_info']['type'] != 'STT_FUNC' or symbol['st_info']['bind'] == 'STB_WEAK' or size == 0):
                         continue
                     # add all symbols to remove to the return list
                     # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
                     found_symbols.append((symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section[2]))
         return found_symbols
 
+    def overwrite_local_func(func_tuple_list):
+        for func in func_tuple_list:
+            #### Overwrite function with null bytes ####
+            self._log('\t' + func[0] + ': overwriting text segment of local function with null bytes')
+            self._f.seek(func[0])
+            for count in range(0, func[1]):
+                self._f.write(chr(0x0).encode('ascii'))
+ 
+
     def print_collection_info(self, collection, full=True):
         if(full):
+            maxlen = 0
+            for x in collection:
+                if(len(x[0]) > maxlen):
+                    maxlen = len(x[0])
             print('Symbols in collection: ' + str(len(collection)))
-            print('Name\t\t| Offset | Start Addr   | Size  | Revision')
-            print('-----------------------------------------------------------')
+            line = "{0:<" + str(maxlen) + "} | {1:<8} | {2:<10} | {3:<6} | {4:<6}"
+            print(line.format("Name", "Offset", "StartAddr", "Size", "Rev."))
+            print((maxlen + 40) * '-')
             for sym in collection:
-                print(sym[0] + '\t\t| ' + str(sym[1]) + '\t | ' + str(sym[2]) + '\t| ' + str(hex(sym[3])) + '\t| ' + str(sym[4]))
+                print(line.format(sym[0], sym[1], sym[2], hex(sym[3]), sym[4]))
         else:
+            size_of_text = 0
+            for section in self._elffile.iter_sections():
+                if(section.name == '.text'):
+                    size_of_text = section["sh_size"]
+
+            total_b_rem = 0
             for sym in collection:
-                print(sym[0] + " ", end="", flush=True)
-            print("")
+                #print(sym[0] + " ", end="", flush=True)
+                total_b_rem += sym[3]
+
+            dynsym_entrys = (self.dynsym[0].header['sh_size'] // self.dynsym[0].header['sh_entsize'])
+
+            print(" Total number of symbols in dynsym: " + str(dynsym_entrys))
+            print("     Nr of symbols to remove: " + str(len(collection)))
+            print(" Total size of text Segment: " + str(size_of_text))
+            print("     Nr of bytes overwritten: " + str(total_b_rem))
+            print("     Percentage of code overwritte: " + str((total_b_rem / size_of_text) * 100))
+
 
     def get_collection_names(self, collection):
         symbols = []
