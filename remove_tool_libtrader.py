@@ -11,6 +11,7 @@ from elf_remove_class import ELFRemove
 
 parser = argparse.ArgumentParser(description='Remove unneccessary symbols of given librarys.')
 parser.add_argument('json', help='the json file from libtrader')
+parser.add_argument('-l', '--local', action="store_true", help='remove local functions')
 parser.add_argument('--lib', nargs='*', help='list of librarys to be processed, use all librarys from json file if not defined')
 parser.add_argument('--overwrite', action="store_true", help='overwrite original library files, otherwise work with a copy in the current working directory')
 parser.add_argument('-v', '--verbose', action="store_true", help='set verbosity')
@@ -26,7 +27,7 @@ def proc():
     try:
         store.load(args.json)
     except Exception as e:
-        print("Not a valid LibraryStore json file!")
+        print("Not a valid libtrader json file!")
         print(e)
         sys.exit(1)
 
@@ -66,24 +67,23 @@ def proc():
         if(args.overwrite):
             ans = input("System library file \'" + lib.fullname + "\' will be changed! Are you sure? (yes):")
             if(ans == 'yes'):
-                elf_rem = ELFRemove(lib.fullname, False)
+                elf_rem = ELFRemove(lib.fullname, args.verbose)
             else:
                 continue
         else:
-            elf_rem = ELFRemove(filename, False)
+            elf_rem = ELFRemove(filename, args.verbose)
 
         if(elf_rem.dynsym == None):
             print('dynsym table not found in File!')
             continue
 
         # get all blacklistet functions created by test script
-        blacklist_s = []
         blacklist = []
 
         blacklist_file = "blacklist_" + os.path.basename(lib.fullname)
         if(os.path.exists(blacklist_file)):
-            log("Found blacklist file for: " + os.path.basename(lib.fullname))
-            with open("blacklist", "r") as file:
+            print("Found blacklist file for: " + os.path.basename(lib.fullname))
+            with open(blacklist_file, "r") as file:
                 blacklist_s = file.readlines()
             blacklist = [int(x.strip(), 10) for x in blacklist_s]
 
@@ -94,6 +94,24 @@ def proc():
                 value = store[lib.fullname].export_users[key]
                 if(not value):
                     addr.append(key)
+            else:
+                print("In blacklist: " + str(key))
+
+        # collect and remove local functions
+        local = []
+        if(args.local):
+            for key in store[lib.fullname].local_functions.keys():
+                # TODO all keys double -> as string and int, why?
+                if(isinstance(key, str)):
+                    continue
+                if(key not in blacklist):
+                    value = store[lib.fullname].local_users.get(key, [])
+                    if(not value):
+                        local.append((key, store[lib.fullname].ranges[key]))
+                else:
+                    print("Local in blacklist: " + str(key))
+
+        elf_rem.overwrite_local_functions(local)
 
         # collect the set of Symbols for given function names
         collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, addr)

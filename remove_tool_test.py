@@ -14,33 +14,41 @@ from librarytrader.librarystore import LibraryStore
 
 parser = argparse.ArgumentParser(description='Removes unneccessary symbols on a copy of given library and tests the given command for SIGSEGV after every symbol removal.')
 parser.add_argument('json', help='the json file from libtrader')
-parser.add_argument('lib', help='the name of the library')
 parser.add_argument('command', nargs=1, help='the command beeing executed with changed library')
+parser.add_argument('-l', '--local', action="store_true", help='remove local functions')
 parser.add_argument('-v', '--verbosity', action="store_true", help='set verbosity')
 parser.add_argument('--args', nargs='*', default=[], help='additional arguments for given command')
 parser.add_argument('--chunks', action="store_true",
                     help='test by chunks of of given size (default=10), might speed up the process')
 parser.add_argument('--chunksize', default=10, type=int, help='set the chunk size')
-parser.add_argument('--all', action="store_true",
-                    help='use all librarys from th given json file, lib param is ignored')
+parser.add_argument('--lib', nargs='*', help='list of librarys to be processed, use all librarys from json file if not defined')
 
 def log(mes):
     if(args.verbosity):
         print(mes)
 
-def test_single_func(addr_list, sys_lib_path, lib_copy, elf_rem, blacklist_file):
+def test_single_func(addr_list, sys_lib_path, lib_copy, elf_rem, blacklist_file, blacklist, local = False):
 
     # test by single functions in given list
     for single_func in addr_list:
+        address = single_func if (not local) else single_func[0]
+        if(address in blacklist):
+            log("Address: " + str(address) + " already in blacklist!")
+            continue
+
         func = []
         func.append(single_func)
 
-        # collect the set of symbols for given function address
-        collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, func)
-        if(len(collection_dynsym) == 0):
-            log("No function for address \'" + str(single_func) + "\' found!")
-            continue
-        elf_rem.remove_from_section(elf_rem.dynsym, collection_dynsym)
+        collection_dynsym = None
+        if(not local):
+            # collect the set of symbols for given function address
+            collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, func)
+            if(len(collection_dynsym) == 0):
+                log("No function for address \'" + str(single_func) + "\' found!")
+                continue
+            elf_rem.remove_from_section(elf_rem.dynsym, collection_dynsym)
+        else:
+            elf_rem.overwrite_local_functions(func)
 
         # run command with changed library
         my_env = os.environ.copy()
@@ -49,7 +57,10 @@ def test_single_func(addr_list, sys_lib_path, lib_copy, elf_rem, blacklist_file)
         output, err = p1.communicate()
 
         # print log message
-        log("Removed: " + str(single_func) + " " + (collection_dynsym[0][0] if(len(collection_dynsym) > 0) else "not found"))
+        if(not local):
+            log("Removed: " + str(single_func) + " " + (collection_dynsym[0][0] if(len(collection_dynsym) > 0) else "not found"))
+        else:
+            log("Removed local: " + str(single_func[0]) + " size: " + str(single_func[1]))
 
         # check for sigsegv
         if(p1.returncode == -signal.SIGSEGV):
@@ -59,16 +70,15 @@ def test_single_func(addr_list, sys_lib_path, lib_copy, elf_rem, blacklist_file)
             copyfile(sys_lib_path, lib_copy)
 
             # write to blacklist file
-            if os.path.exists(blacklist_file):
-                append_write = 'a' # append if already exists
-            else:
-                append_write = 'w' # make a new file if not
-            with open(blacklist_file, append_write) as f:
-                f.write(str(single_func) + " " + collection_dynsym[0][0] + "\n")
+            with open(blacklist_file, "a+") as f:
+                if(not local):
+                    f.write(str(single_func) + '\n')
+                else:
+                    f.write(str(single_func[0]) + '\n')
         else:
             log("-----> OK")
 
-def test_in_chunks(addr, sys_lib_path, lib_copy, elf_rem, blacklist_file):
+def test_in_chunks(addr, sys_lib_path, lib_copy, elf_rem, blacklist_file, blacklist, local = False):
 
     # divide in chunks with size given by parameter chunksize
     n = args.chunksize
@@ -77,24 +87,31 @@ def test_in_chunks(addr, sys_lib_path, lib_copy, elf_rem, blacklist_file):
     for chunk in lists:
 
         # collect and remove the set of symbols for given function address
-        collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, chunk)
-        if(len(collection_dynsym) == 0):
-            log("No functions for addresses found!")
-            log(chunk)
-            continue
-        elf_rem.remove_from_section(elf_rem.dynsym, collection_dynsym)
+        collection_dynsym = None
+        if(not local):
+            collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, chunk)
+            if(len(collection_dynsym) == 0):
+                log("No functions for addresses found!")
+                log(chunk)
+                continue
+            elf_rem.remove_from_section(elf_rem.dynsym, collection_dynsym)
+        else:
+            elf_rem.overwrite_local_functions(chunk)
 
         # run given command with preloaded changed library
         my_env = os.environ.copy()
         my_env["LD_PRELOAD"] = lib_copy
-        print(args.command + args.args)
+        log("Command: " + str(args.command + args.args))
         p1 = subprocess.Popen(args.command + args.args, env=my_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         p1.communicate()
 
         if(args.verbosity):
             log("")
             log("Current Library: " + os.path.basename(sys_lib_path))
-            elf_rem.print_collection_info(collection_dynsym)
+            if(not local):
+                elf_rem.print_collection_info(collection_dynsym)
+            else:
+                log("Local Functions: ")
             print(chunk)
 
         # check for SIGSEGV
@@ -105,7 +122,7 @@ def test_in_chunks(addr, sys_lib_path, lib_copy, elf_rem, blacklist_file):
             copyfile(sys_lib_path, lib_copy)
 
             # if file is broken after removal of chunk -> test every function in chunk indivitual
-            test_single_func(chunk, sys_lib_path, lib_copy, elf_rem, blacklist_file)
+            test_single_func(chunk, sys_lib_path, lib_copy, elf_rem, blacklist_file, blacklist, local)
         else:
             log("-----> SET OK")
 
@@ -122,7 +139,8 @@ def proc():
 
     # check if library should be tested
     for lib in libobjs:
-        if(args.all or os.path.basename(lib.fullname) == os.path.basename(args.lib)):
+        if(not args.lib or os.path.basename(lib.fullname) in args.lib):
+            print(lib.fullname)
             lib_list.append(lib.fullname)
 
     # if no librarys found -> die
@@ -142,12 +160,32 @@ def proc():
             # check if blacklist file already exists, if so append version count
             iterate = 1
             fname = "blacklist_" + os.path.basename(sys_lib_path)
-            while(True):
-                if(os.path.isfile(fname)):
-                    fname = fname + "_" + str(iterate)
-                    iterate += 1
+            blacklist = []
+            if(os.path.exists(fname)):
+                ans = input("Blacklist file \'" + fname + "\' already exists. Append new addresses? (yes):")
+                if(ans == 'yes'):
+                    with open(fname, "r") as file:
+                        blacklist_s = file.readlines()
+                    blacklist = [int(x.strip(), 10) for x in blacklist_s]
                 else:
-                    break
+                    print("Creating new file!")
+                    while(True):
+                        if(os.path.isfile(fname)):
+                            fname = fname + "_" + str(iterate)
+                            iterate += 1
+                        else:
+                            break
+
+            # collect local functions
+            local = []
+            if(args.local):
+                for key in store[sys_lib_path].local_functions.keys():
+                    # TODO all keys double -> as string and int, why?
+                    if(isinstance(key, str)):
+                        continue
+                    value = store[sys_lib_path].local_users.get(key, [])
+                    if(not value):
+                        local.append((key, store[sys_lib_path].ranges[key]))
 
             # find symbols to remove from library
             addr = []
@@ -155,7 +193,7 @@ def proc():
                 value = store[sys_lib_path].export_users[key]
                 if not value:
                     addr.append(key)
-            if(len(addr) == 0):
+            if(len(addr) == 0 and len(local) == 0):
                 continue
 
             # create a library copy in current directory
@@ -173,9 +211,13 @@ def proc():
 
             # remove functions from library
             if(args.chunks):
-                test_in_chunks(addr, sys_lib_path, lib_copy, elf_rem, fname)
+                if(args.local):
+                    test_in_chunks(local, sys_lib_path, lib_copy, elf_rem, fname, blacklist, True)
+                test_in_chunks(addr, sys_lib_path, lib_copy, elf_rem, fname, blacklist)
             else:
-                test_single_func(addr, sys_lib_path, lib_copy, elf_rem, fname)
+                if(args.local):
+                    test_single_func(local, sys_lib_path, lib_copy, elf_rem, fname, blacklist, True)
+                test_single_func(addr, sys_lib_path, lib_copy, elf_rem, fname, blacklist)
 
             # delete copy of library from cwd
             os.remove(lib_copy)
