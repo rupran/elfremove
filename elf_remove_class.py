@@ -5,10 +5,11 @@ import binascii
 import struct
 
 from elftools.elf.elffile import ELFFile
-from elftools.elf.sections import NoteSection
-from elftools.elf.sections import NullSection
-from elftools.elf.sections import StringTableSection
-from elftools.elf.sections import SymbolTableSection
+from elftools.elf.sections import Section, NoteSection, StringTableSection, SymbolTableSection
+from elftools.elf.relocation import RelocationSection
+from elftools.elf.dynamic import DynamicSegment
+from elftools.elf.enums import ENUM_D_TAG_COMMON
+
 
 class ELFRemove:
 
@@ -28,12 +29,15 @@ class ELFRemove:
         self.dynsym = None
         self.symtab = None
         self._gnu_version = None
+        self._rel_plt = None
+        self._rel_dyn = None
 
         #### check for supported architecture ####
         if(self._elffile.header['e_machine'] != 'EM_X86_64' and self._elffile.header['e_machine'] != 'EM_386'):
             raise Exception('Wrong Architecture!')
 
         section_no = 0
+        # TODO support for HASH section
         # search for needed sections and remember (Section-Object, Section Nr., Version Counter)
         for sect in self._elffile.iter_sections():
             if(sect.name == '.gnu.hash'):
@@ -56,7 +60,51 @@ class ELFRemove:
                 self._rel_dyn = (sect, section_no, 0)
             section_no += 1
         if(self.dynsym == None and self.symtab == None):
-            raise Exception("No symbol table found!")
+            self._log("No section headers found in ELF, fallback to dynamic segment!")
+            # fallback if section headers have been stripped from the binary
+            for seg in self._elffile.iter_segments():
+                if(isinstance(seg, DynamicSegment)):
+                    # try to build symtab section from dynamic segment information
+                    size, offset = self._dyn_get_section_info(seg, 'DT_SYMTAB')
+                    self.dynsym = (self._build_symtab_section('.dynsym', offset, size, seg.elfstructs.Elf_Sym.sizeof(), seg._get_stringtable()), -1, 0)
+                    self._log('    Found \'DYNSYM\' section!')
+
+                    # search for other important sections
+                    rel_plt_off = rel_plt_size = rel_dyn_off = rel_dyn_size = 0
+                    for tag in seg.iter_tags():
+                        if(tag['d_tag'] == "DT_GNU_HASH"):
+                            self._log('    Found \'GNU_HASH\' section!')
+                            size, offset = self._dyn_get_section_info(seg, tag['d_tag'])
+                            self._gnu_hash = ((self._build_section('.gnu.hash', offset, size, 0, 0)), -1, 0)
+                        if(tag['d_tag'] == "DT_VERSYM"):
+                            self._log('    Found \'GNU_VERSION\' section!')
+                            size, offset = self._dyn_get_section_info(seg, tag['d_tag'])
+                            self._gnu_version = (self._build_section('.gnu.version', offset, size, 2, 0), -1, 0)
+
+                        if(tag['d_tag'] == "DT_JMPREL"):
+                            _, rel_plt_off = seg.get_table_offset(tag['d_tag'])
+                        if(tag['d_tag'] == "DT_PLTRELSZ"):
+                            rel_plt_size = tag['d_val']
+
+                        if(tag['d_tag'] == "DT_RELA" or tag['d_tag'] == "DT_REL"):
+                            _, rel_dyn_off = seg.get_table_offset(tag['d_tag'])
+                        if(tag['d_tag'] == "DT_RELASZ" or tag['d_tag'] == "DT_RELSZ"):
+                            rel_dyn_size = tag['d_val']
+
+                    ent_size = seg.elfstructs.Elf_Rela.sizeof() if (self._elffile.header['e_machine'] == 'EM_X86_64') else seg.elfstructs.Elf_Rel.sizeof()
+                    sec_name = '.rela.' if (self._elffile.header['e_machine'] == 'EM_X86_64') else '.rel.'
+                    sec_type = 'SHT_RELA' if (self._elffile.header['e_machine'] == 'EM_X86_64') else 'SHT_REL'
+
+                    if(rel_plt_off != 0 and rel_plt_size != 0):
+                        self._log('    Found \'RELA_PLT\' section!')
+                        self._rel_plt = (self._build_relocation_section(sec_name + 'plt', rel_plt_off, rel_plt_size, ent_size, sec_type), -1, 0)
+                    if(rel_dyn_off != 0 and rel_dyn_size != 0):
+                        self._log('    Found \'RELA_DYN\' section!')
+                        self._rel_dyn = (self._build_relocation_section(sec_name + 'dyn', rel_plt_off, rel_plt_size, ent_size, sec_type), -1, 0)
+
+                    for sym in self.dynsym[0].iter_symbols():
+                        print(sym.name)
+
 
     def __del__(self):
         self._f.close()
@@ -72,6 +120,61 @@ class ELFRemove:
             h = h & 0xFFFFFFFF
         return h
 
+    def _build_relocation_section(self, name, off, size, entsize, sec_type):
+        return RelocationSection(self._build_header(off, size, entsize, name, sec_type), name, self._elffile)
+
+    def _build_symtab_section(self, name, off, size, entsize, stringtable):
+        return SymbolTableSection(self._build_header(off, size, entsize, name, 0), name, self._elffile, stringtable)
+
+    def _build_section(self, name, off, size, entsize, shtype):
+        return Section(self._build_header(off, size, entsize, name, shtype), name, self._elffile)
+
+    def _build_header(self, off, size, entsize, name, shtype):
+        # build own header
+        # get header with index 0 -> should always exist with all entrys set to 0
+        # if no section headers exist in file
+        header = self._elffile._get_section_header(0)
+
+        # set the desired entries
+        header['name'] = name
+        header['sh_type'] = shtype
+        header['sh_offset'] = off
+        header['sh_size'] = size
+        header['sh_entsize'] = entsize
+        return header
+
+    def _dyn_get_section_info(self, dyn_seg, sec_name):
+        ptr, offset = dyn_seg.get_table_offset(sec_name)
+        if ptr is None or offset is None:
+            raise Exception('Dynamic segment does not contain \'' + sec_name + '\'')
+
+        nearest_ptr = None
+        # entries with value interpreted as pointer (https://docs.oracle.com/cd/E23824_01/html/819-0690/chapter6-42444.html)
+        dptr_entries = [3, 4, 5, 6, 7, 12, 13, 17, 21, 23, 25, 26, 32
+            ,0x6ffffefa, 0x6ffffefb, 0x6ffffefc, 0x6ffffefd, 0x6ffffefe, 0x6ffffeff
+            ,0x6ffffffe, 0x6ffffffc]
+        for tag in dyn_seg.iter_tags():
+            tag_ptr = tag['d_ptr']
+
+            # fix for symtab
+            if (ENUM_D_TAG_COMMON[tag['d_tag']] not in dptr_entries):
+                continue
+
+            if (tag_ptr > ptr and (nearest_ptr is None or nearest_ptr > tag_ptr)):
+                nearest_ptr = tag_ptr
+
+        if nearest_ptr is None:
+            # Use the end of segment that contains DT_SYMTAB.
+            for segment in dyn_seg.elffile.iter_segments():
+                if (segment['p_vaddr'] <= tab_ptr and
+                        tab_ptr <= (segment['p_vaddr'] + segment['p_filesz'])):
+                    nearest_ptr = segment['p_vaddr'] + segment['p_filesz']
+
+        if nearest_ptr is None:
+            raise Exception('Could not determine the size of \'' + name + '\' section.')
+        return (nearest_ptr - ptr, offset)
+
+
     '''
     Function:   change_section_size
     Parameter:  section = Tuple with section object and index (object, index)
@@ -80,6 +183,9 @@ class ELFRemove:
     Description: Decreases the size of the given section in its header by 'size' bytes
     '''
     def _change_section_size(self, section, size):
+        # can't change section header f no header in elffile
+        if(section[1] == -1):
+            return
         head_entsize = self._elffile['e_shentsize']
         off_to_head = self._elffile['e_shoff'] + (head_entsize * section[1])
         if(self._elffile.header['e_machine'] == 'EM_X86_64'):
@@ -109,7 +215,7 @@ class ELFRemove:
             # TODO start from offset, not at 0!
             ent_size = 0
             ent_cnt = 0
-            total_entries = self._rel_dyn[0].num_relocations()
+            total_entries = self._rel_dyn[0].header['sh_size'] // self._rel_dyn[0].header['sh_entsize']
             offset = self._rel_dyn[0].header['sh_offset']
             to_remove = -1
 
@@ -145,6 +251,7 @@ class ELFRemove:
         if(section != None):
             ent_size = 0
             ent_cnt = 0
+
             total_entries = section[0].num_relocations()
             offset = section[0].header['sh_offset']
             to_remove = -1
@@ -155,10 +262,8 @@ class ELFRemove:
                 ent_size = 8 # Elf32_rel struct size, x86 always rel
 
             for reloc in section[0].iter_relocations():
-                #print("Reloc: (%s)" % 'RELA' if reloc.is_RELA() else 'REL')
                 # case: delete entry
                 if(reloc['r_info_sym'] == sym_nr):
-                    #print("Reloc offset: " + str(reloc['r_offset']) + " type: " + str(reloc['r_info_type']) + " sym: " + str(reloc['r_info_sym']))
                     if(to_remove != -1):
                         raise Exception("double value in rel.plt")
                     to_remove = ent_cnt
@@ -185,6 +290,7 @@ class ELFRemove:
                 ent_cnt += 1
 
             if(to_remove != -1):
+                # TODO solution might be the size in dynamic segment
                 # TODO lib breaks when entries get displaced
                 #for cur_ent in range(to_remove, total_entries - 1):
                 #    self._f.seek(offset + (cur_ent + 1) * ent_size)
@@ -421,6 +527,9 @@ class ELFRemove:
 
         for symbol in section[0].iter_symbols():
             entry_cnt += 1
+            # fix for section from dynamic segment
+            if(isinstance(symbol.name, bytes)):
+                symbol.name = symbol.name.decode()
             if(complement):
                 if(symbol.name not in symbol_list):
                     size = symbol.entry['st_size']
@@ -450,6 +559,9 @@ class ELFRemove:
 
         for symbol in section[0].iter_symbols():
             entry_cnt += 1
+            # fix for section from dynamic segment
+            if(isinstance(symbol.name, bytes)):
+                symbol.name = symbol.name.decode()
             if(complement):
                 if(symbol.entry['st_value'] not in address_list):
                     size = symbol.entry['st_size']
@@ -470,14 +582,13 @@ class ELFRemove:
                     found_symbols.append((symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section[2]))
         return found_symbols
 
-    def overwrite_local_func(func_tuple_list):
+    def overwrite_local_functions(self, func_tuple_list):
         for func in func_tuple_list:
             #### Overwrite function with null bytes ####
-            self._log('\t' + func[0] + ': overwriting text segment of local function with null bytes')
+            self._log('\t' + str(func[0]) + ': overwriting text segment of local function with null bytes')
             self._f.seek(func[0])
             for count in range(0, func[1]):
                 self._f.write(chr(0x0).encode('ascii'))
- 
 
     def print_collection_info(self, collection, full=True):
         if(full):
