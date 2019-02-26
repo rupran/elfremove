@@ -246,7 +246,6 @@ class ELFRemove:
                     self._f.write(cur_ent_b)
                 ent_cnt += 1
 
-
     def _edit_rel_sect(self, section, sym_nr):
         if(section != None):
             ent_size = 0
@@ -311,7 +310,7 @@ class ELFRemove:
                 #   #self._f.write(chr(0x0).encode('ascii'))
                 #self._change_section_size(self._rel_plt, ent_size)
 
-                # TODO temporary: set a placeholder entry with dynsym offset 1
+                # TODO temporary: set a placeholder entry with dynsym offset 0
                 self._f.seek(offset + to_remove * ent_size)
                 cur_ent_b = self._f.read(ent_size)
                 if(ent_size == 8):
