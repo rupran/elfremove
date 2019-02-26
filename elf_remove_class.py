@@ -210,42 +210,6 @@ class ELFRemove:
             self._f.write(value.to_bytes(4, sys.byteorder))
 
 
-    def _edit_rel_dyn(self, sym_nr):
-        if(self._rel_dyn != None):
-            # TODO start from offset, not at 0!
-            ent_size = 0
-            ent_cnt = 0
-            total_entries = self._rel_dyn[0].header['sh_size'] // self._rel_dyn[0].header['sh_entsize']
-            offset = self._rel_dyn[0].header['sh_offset']
-            to_remove = -1
-
-            if(self._elffile.header['e_machine'] == 'EM_X86_64'):
-                ent_size = 24 # Elf64_rela struct size, x64 always rela?
-            else:
-                ent_size = 8 # Elf32_rel struct size, x86 always rel
-
-            for reloc in self._rel_dyn[0].iter_relocations():
-                # case: entry_num > removed_entry -> count down sym_nr by 1
-                if(reloc['r_info_sym'] > sym_nr):
-                    self._f.seek(offset + ent_cnt * ent_size)
-                    cur_ent_b = self._f.read(ent_size)
-                    if(ent_size == 8):
-                        addr, info = struct.unpack('<Ii', cur_ent_b)
-                        old_sym = info >> 8
-                        old_sym -= 1
-                        info = (old_sym << 8) + (info & 0xFF)
-                        cur_ent_b = struct.pack('<Ii', addr, info)
-                    else:
-                        addr, info, addent = struct.unpack('<QqQ', cur_ent_b)
-                        old_sym = info >> 32
-                        old_sym -= 1
-                        info = (old_sym << 32) + (info & 0xFFFFFFFF)
-                        cur_ent_b = struct.pack('<QqQ', addr, info, addent)
-
-                    self._f.seek(offset + ent_cnt * ent_size)
-                    self._f.write(cur_ent_b)
-                ent_cnt += 1
-
     def _edit_rel_sect(self, section, sym_nr):
         if(section != None):
             ent_size = 0
