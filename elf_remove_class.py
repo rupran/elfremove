@@ -38,7 +38,7 @@ class ELFRemove:
 
         section_no = 0
         # TODO support for HASH section
-        # search for needed sections and remember (Section-Object, Section Nr., Version Counter)
+        # search for supported sections and remember (Section-Object, Section Nr., Version Counter)
         for sect in self._elffile.iter_sections():
             if(sect.name == '.gnu.hash'):
                 self._log('    Found \'GNU_HASH\' section!')
@@ -65,20 +65,22 @@ class ELFRemove:
             for seg in self._elffile.iter_segments():
                 if(isinstance(seg, DynamicSegment)):
                     # try to build symtab section from dynamic segment information
-                    size, offset = self._dyn_get_section_info(seg, 'DT_SYMTAB')
+                    size = seg.num_symbols() * seg.elfstructs.Elf_Sym.sizeof()
+                    _, offset = seg.get_table_offset('DT_SYMTAB')
                     self.dynsym = (self._build_symtab_section('.dynsym', offset, size, seg.elfstructs.Elf_Sym.sizeof(), seg._get_stringtable()), -1, 0)
                     self._log('    Found \'DYNSYM\' section!')
 
-                    # search for other important sections
+                    # search for all supported sections and build section object with needed entries
                     rel_plt_off = rel_plt_size = rel_dyn_off = rel_dyn_size = 0
                     for tag in seg.iter_tags():
                         if(tag['d_tag'] == "DT_GNU_HASH"):
                             self._log('    Found \'GNU_HASH\' section!')
-                            size, offset = self._dyn_get_section_info(seg, tag['d_tag'])
-                            self._gnu_hash = ((self._build_section('.gnu.hash', offset, size, 0, 0)), -1, 0)
+                            _, offset = seg.get_table_offset(tag['d_tag'])
+                            self._gnu_hash = ((self._build_section('.gnu.hash', offset, -1, 0, 0)), -1, 0)
                         if(tag['d_tag'] == "DT_VERSYM"):
                             self._log('    Found \'GNU_VERSION\' section!')
-                            size, offset = self._dyn_get_section_info(seg, tag['d_tag'])
+                            size = seg.num_symbols() * 2
+                            _, offset = seg.get_table_offset(tag['d_tag'])
                             self._gnu_version = (self._build_section('.gnu.version', offset, size, 2, 0), -1, 0)
 
                         if(tag['d_tag'] == "DT_JMPREL"):
@@ -103,7 +105,7 @@ class ELFRemove:
                         self._rel_dyn = (self._build_relocation_section(sec_name + 'dyn', rel_plt_off, rel_plt_size, ent_size, sec_type), -1, 0)
 
                     for sym in self.dynsym[0].iter_symbols():
-                        print(sym.name)
+                        print("Sym: " + sym.name)
 
 
     def __del__(self):
@@ -131,16 +133,9 @@ class ELFRemove:
 
     def _build_header(self, off, size, entsize, name, shtype):
         # build own header
-        # get header with index 0 -> should always exist with all entrys set to 0
-        # if no section headers exist in file
-        header = self._elffile._get_section_header(0)
+        header = {'sh_name': name, 'sh_type': shtype, 'sh_flags': 0, 'sh_addr': 0, 'sh_offset': off
+            , 'sh_size': size, 'sh_link': 0, 'sh_info': 0, 'sh_addralign': 0, 'sh_entsize': entsize}
 
-        # set the desired entries
-        header['name'] = name
-        header['sh_type'] = shtype
-        header['sh_offset'] = off
-        header['sh_size'] = size
-        header['sh_entsize'] = entsize
         return header
 
     def _dyn_get_section_info(self, dyn_seg, sec_name):
@@ -417,6 +412,7 @@ class ELFRemove:
 
     Description: removes the symbols from the given section
     '''
+    # TODO change -> no section should be needed!
     def remove_from_section(self, section, collection, overwrite=True):
         if(section == None):
             raise Exception('Section not available!')
@@ -490,9 +486,6 @@ class ELFRemove:
 
         for symbol in section[0].iter_symbols():
             entry_cnt += 1
-            # fix for section from dynamic segment
-            if(isinstance(symbol.name, bytes)):
-                symbol.name = symbol.name.decode()
             if(complement):
                 if(symbol.name not in symbol_list):
                     size = symbol.entry['st_size']
@@ -523,8 +516,6 @@ class ELFRemove:
         for symbol in section[0].iter_symbols():
             entry_cnt += 1
             # fix for section from dynamic segment
-            if(isinstance(symbol.name, bytes)):
-                symbol.name = symbol.name.decode()
             if(complement):
                 if(symbol.entry['st_value'] not in address_list):
                     size = symbol.entry['st_size']
