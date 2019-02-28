@@ -9,6 +9,7 @@ from elftools.elf.sections import Section, NoteSection, StringTableSection, Symb
 from elftools.elf.relocation import RelocationSection
 from elftools.elf.dynamic import DynamicSegment
 from elftools.elf.enums import ENUM_D_TAG_COMMON
+from elftools.elf.hash import HashSection
 
 
 class ELFRemove:
@@ -31,18 +32,21 @@ class ELFRemove:
         self._gnu_version = None
         self._rel_plt = None
         self._rel_dyn = None
+        self._elf_hash = None
 
         #### check for supported architecture ####
         if(self._elffile.header['e_machine'] != 'EM_X86_64' and self._elffile.header['e_machine'] != 'EM_386'):
             raise Exception('Wrong Architecture!')
 
         section_no = 0
-        # TODO support for HASH section
         # search for supported sections and remember (Section-Object, Section Nr., Version Counter)
         for sect in self._elffile.iter_sections():
             if(sect.name == '.gnu.hash'):
                 self._log('    Found \'GNU_HASH\' section!')
                 self._gnu_hash = (sect, section_no, 0)
+            if(sect.name == '.hash'):
+                self._log('    Found \'HASH\' section!')
+                self._elf_hash = (sect, section_no, 0)
             if(sect.name == '.dynsym'):
                 self._log('    Found \'DYNSYM\' section!')
                 self.dynsym = (sect, section_no, 0)
@@ -59,11 +63,13 @@ class ELFRemove:
                 self._log('    Found \'RELA_DYN\' section!')
                 self._rel_dyn = (sect, section_no, 0)
             section_no += 1
+
+        # fallback if section headers have been stripped from the binary
         if(self.dynsym == None and self.symtab == None):
             self._log("No section headers found in ELF, fallback to dynamic segment!")
-            # fallback if section headers have been stripped from the binary
             for seg in self._elffile.iter_segments():
                 if(isinstance(seg, DynamicSegment)):
+
                     # try to build symtab section from dynamic segment information
                     size = seg.num_symbols() * seg.elfstructs.Elf_Sym.sizeof()
                     _, offset = seg.get_table_offset('DT_SYMTAB')
@@ -77,6 +83,10 @@ class ELFRemove:
                             self._log('    Found \'GNU_HASH\' section!')
                             _, offset = seg.get_table_offset(tag['d_tag'])
                             self._gnu_hash = ((self._build_section('.gnu.hash', offset, -1, 0, 0)), -1, 0)
+                        if(tag['d_tag'] == "DT_HASH"):
+                            self._log('    Found \'HASH\' section!')
+                            _, offset = seg.get_table_offset(tag['d_tag'])
+                            self._elf_hash = ((self._build_section('.hash', offset, -1, 0, 0)), -1, 0)
                         if(tag['d_tag'] == "DT_VERSYM"):
                             self._log('    Found \'GNU_VERSION\' section!')
                             size = seg.num_symbols() * 2
@@ -114,6 +124,18 @@ class ELFRemove:
     def _log(self, mes):
         if(self._debug):
             print('DEBUG: ' + mes)
+
+    def _elfhash(self, func_name):
+        h = 0
+        g = 0
+        for c in func_name:
+            h = (h << 4) + ord(c)
+            h = h & 0xFFFFFFFF
+            g = h & 0xF0000000
+            if(g != 0):
+                h = h ^ (g >> 24)
+            h = h & ~g
+        return h
 
     def _gnuhash(self, func_name):
         h = 5381
@@ -317,6 +339,93 @@ class ELFRemove:
             # change section size in header
             self._change_section_size(self._gnu_version, ent_size)
 
+
+
+    def test_hash(self):
+        if(self._elf_hash != None):
+            sect = HashSection(self._elffile.stream, self._elf_hash[0].header['sh_offset'], self._elffile)
+            # print hash section
+            for i in range (0, sect.params['nchains']):
+                print(self.dynsym[0].get_symbol(i).name)
+
+            # find every symbol in hash table
+            for i in range(1, self.dynsym[0].num_symbols()):
+                name = self.dynsym[0].get_symbol(i).name
+                print("Check hash of symbol: " + name)
+                sym_hash = self._elfhash(name)
+                bucket = sym_hash % sect.params['nbuckets']
+                cur_ptr = sect.params['buckets'][bucket]
+                found = 0
+                while(cur_ptr != 0):
+                    if(self.dynsym[0].get_symbol(cur_ptr).name == name):
+                        print("     Found!")
+                        found = 1
+                        break
+                    cur_ptr = sect.params['chains'][cur_ptr]
+                if(found == 0):
+                    raise Exception("Symbol not found in bucket!!! Hash Section broken!")
+
+
+
+
+    def _edit_elf_hashtable(self, symbol_name, dynsym_nr, total_ent_sym):
+        if(self._elf_hash != None):
+            sect = HashSection(self._elffile.stream, self._elf_hash[0].header['sh_offset'], self._elffile)
+            func_hash = self._elfhash(symbol_name)
+            bucket_nr = func_hash % sect.params['nbuckets']
+            self._log("\t" + symbol_name + ': adjust hash_section, hash = ' + hex(func_hash) + ' bucket = ' + str(bucket_nr))
+
+            # find symbol and remove entry from chain
+            cur_ptr = sect.params['buckets'][bucket_nr]
+
+            # case: first elem -> change start value of Bucket
+            if(cur_ptr == dynsym_nr):
+                sect.params['buckets'][bucket_nr] = sect.params['chains'][cur_ptr]
+            else:
+                while(cur_ptr != 0):
+                    prev_ptr = cur_ptr
+                    cur_ptr = sect.params['chains'][cur_ptr]
+                    # case: middle and last element -> set pointer to next element in previous element
+                    if(cur_ptr == dynsym_nr):
+                        sect.params['chains'][prev_ptr] = sect.params['chains'][cur_ptr]
+                        break
+                    if(cur_ptr == 0):
+                        raise Exception("Entry \'" + symbol_name + "\' not found in Hash Table! Hash Table is broken!")
+
+            # delete entry and change pointer in list
+            for i in range(dynsym_nr, (sect.params['nchains'] - 1)):
+                sect.params['chains'][i] = sect.params['chains'][i + 1]
+            sect.params['chains'][sect.params['nchains'] - 1] = 0
+            sect.params['nchains'] -= 1
+
+            for i in range(0, sect.params['nchains']):
+                if(sect.params['chains'][i] >= dynsym_nr):
+                    sect.params['chains'][i] -= 1
+
+            for i in range(0, sect.params['nbuckets']):
+                if(sect.params['buckets'][i] >= dynsym_nr):
+                    sect.params['buckets'][i] -= 1
+
+            # TODO -> do this just once when all changes have been made
+            # write to file
+            #  - nchain
+            self._f.seek(self._elf_hash[0].header['sh_offset'] +  4)
+            self._f.write(sect.params['nchains'].to_bytes(4, sys.byteorder))
+
+            # - buckets
+            buckets_start = self._elf_hash[0].header['sh_offset'] + 8
+            for i in range(0, sect.params['nbuckets']):
+                self._f.seek(buckets_start + i * 4)
+                self._f.write(sect.params['buckets'][i].to_bytes(4, sys.byteorder))
+
+            # - chains
+            chains_start = self._elf_hash[0].header['sh_offset'] + 8 + sect.params['nbuckets'] * 4
+            for i in range(0, sect.params['nchains']):
+                self._f.seek(chains_start + i * 4)
+                self._f.write(sect.params['chains'][i].to_bytes(4, sys.byteorder))
+
+
+
     '''
     Function:   _edit_gnu_hashtable
     Parameter:  symbol_name   = name of the Symbol to be removed
@@ -417,6 +526,9 @@ class ELFRemove:
         if(section == None):
             raise Exception('Section not available!')
 
+        if(len(collection) == 0):
+            return
+
         # sort list by offset in symbol table
         # otherwise the index would be wrong after one Element was removed
         sorted_list = sorted(collection, reverse=True, key=lambda x: x[1])
@@ -433,6 +545,7 @@ class ELFRemove:
             # edit gnu_hash table, gnu_versions and relocation table but only for dynsym section
             if(section[0].name == '.dynsym'):
                 self._edit_gnu_hashtable(symbol_t[0], symbol_t[1], max_entrys)
+                self._edit_elf_hashtable(symbol_t[0], symbol_t[1], max_entrys)
                 self._edit_gnu_versions(symbol_t[1], max_entrys)
                 self._edit_rel_sect(self._rel_plt, symbol_t[1])
                 self._edit_rel_sect(self._rel_dyn, symbol_t[1])
@@ -461,6 +574,7 @@ class ELFRemove:
                         #pass
             removed += 1;
             max_entrys -= 1
+
 
         self._change_section_size(section, removed * section[0].header['sh_entsize'])
         section = (section[0], section[1], section[2] + 1)
