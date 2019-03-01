@@ -24,7 +24,7 @@ class ELFRemove:
     '''
     def __init__(self, filename, debug = False):
         self._debug = debug
-        self._f = open(filename, 'r+b')
+        self._f = open(filename, 'r+b', buffering=0)
         self._elffile = ELFFile(self._f)
         self._gnu_hash = None
         self.dynsym = None
@@ -113,9 +113,6 @@ class ELFRemove:
                     if(rel_dyn_off != 0 and rel_dyn_size != 0):
                         self._log('    Found \'RELA_DYN\' section!')
                         self._rel_dyn = (self._build_relocation_section(sec_name + 'dyn', rel_plt_off, rel_plt_size, ent_size, sec_type), -1, 0)
-
-                    for sym in self.dynsym[0].iter_symbols():
-                        print("Sym: " + sym.name)
 
 
     def __del__(self):
@@ -571,7 +568,6 @@ class ELFRemove:
                     self._f.seek(symbol_t[2])
                     for count in range(0, symbol_t[3]):
                         self._f.write(chr(0x0).encode('ascii'))
-                        #pass
             removed += 1;
             max_entrys -= 1
 
