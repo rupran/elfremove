@@ -681,9 +681,12 @@ class ELFRemove:
 
             print(" Total number of symbols in dynsym: " + str(dynsym_entrys))
             print("     Nr of symbols to remove: " + str(len(collection)))
-            print(" Total size of text Segment: " + str(size_of_text))
-            print("     Nr of bytes overwritten: " + str(total_b_rem))
-            print("     Percentage of code overwritte: " + str((total_b_rem / size_of_text) * 100))
+            if(size_of_text != 0):
+                print(" Total size of text Segment: " + str(size_of_text))
+                print("     Nr of bytes overwritten: " + str(total_b_rem))
+                print("     Percentage of code overwritte: " + str((total_b_rem / size_of_text) * 100))
+            else:
+                print(" Size of text Segment not given in section header")
 
 
     def get_collection_names(self, collection):
