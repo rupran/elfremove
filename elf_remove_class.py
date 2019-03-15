@@ -105,14 +105,15 @@ class ELFRemove:
 
                     ent_size = seg.elfstructs.Elf_Rela.sizeof() if (self._elffile.header['e_machine'] == 'EM_X86_64') else seg.elfstructs.Elf_Rel.sizeof()
                     sec_name = '.rela.' if (self._elffile.header['e_machine'] == 'EM_X86_64') else '.rel.'
+                    sec_out_name = 'RELA_' if (self._elffile.header['e_machine'] == 'EM_X86_64') else 'REL_'
                     sec_type = 'SHT_RELA' if (self._elffile.header['e_machine'] == 'EM_X86_64') else 'SHT_REL'
 
                     if(rel_plt_off != 0 and rel_plt_size != 0):
-                        self._log('    Found \'RELA_PLT\' section!')
+                        self._log('    Found \'' + sec_out_name + 'PLT\' section!')
                         self._rel_plt = (self._build_relocation_section(sec_name + 'plt', rel_plt_off, rel_plt_size, ent_size, sec_type), -1, 0)
                     if(rel_dyn_off != 0 and rel_dyn_size != 0):
-                        self._log('    Found \'RELA_DYN\' section!')
-                        self._rel_dyn = (self._build_relocation_section(sec_name + 'dyn', rel_plt_off, rel_plt_size, ent_size, sec_type), -1, 0)
+                        self._log('    Found \'' + sec_out_name + 'DYN\' section!')
+                        self._rel_dyn = (self._build_relocation_section(sec_name + 'dyn', rel_dyn_off, rel_dyn_size, ent_size, sec_type), -1, 0)
 
 
     def __del__(self):
