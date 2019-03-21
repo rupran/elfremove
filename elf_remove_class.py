@@ -3,6 +3,7 @@
 import sys
 import binascii
 import struct
+import collections
 
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import Section, NoteSection, StringTableSection, SymbolTableSection
@@ -33,6 +34,7 @@ class ELFRemove:
         self._rel_plt = None
         self._rel_dyn = None
         self._elf_hash = None
+        self._blacklist = ["_init", "_fini"]
 
         #### check for supported architecture ####
         if(self._elffile.header['e_machine'] != 'EM_X86_64' and self._elffile.header['e_machine'] != 'EM_386'):
@@ -242,9 +244,49 @@ class ELFRemove:
             for reloc in section[0].iter_relocations():
                 # case: delete entry
                 if(reloc['r_info_sym'] == sym_nr):
-                    if(to_remove != -1):
-                        raise Exception("double value in rel.plt")
-                    to_remove = ent_cnt
+                    # TODO solution might be the size in dynamic segment
+                    # TODO lib breaks when entries get displaced
+                    #for cur_ent in range(to_remove, total_entries - 1):
+                    #    self._f.seek(offset + (cur_ent + 1) * ent_size)
+                    #    cur_ent_b = self._f.read(ent_size)
+                    #    self._f.seek(offset + cur_ent * ent_size)
+                    #    self._f.write(cur_ent_b)
+
+                    #self._f.seek(offset + (ent_cnt + 1) * ent_size)
+                    #cur_ent_b = self._f.read(ent_size)
+                    #self._f.seek(offset + ent_cnt * ent_size)
+                    #self._f.write(cur_ent_b)
+
+                    # remove double last value
+                    #self._f.seek(offset + (total_entries - 1) * ent_size)
+                    #for count in range(0, ent_size):
+                    #    pass
+                    #   # TODO lib breaks when deletet entry overriden! header size?
+                    #   #self._f.write(chr(0x0).encode('ascii'))
+                    #self._change_section_size(self._rel_plt, ent_size)
+
+                    # TODO temporary: set a placeholder entry with dynsym offset 0
+                    self._f.seek(offset + ent_cnt * ent_size)
+                    cur_ent_b = self._f.read(ent_size)
+                    if(ent_size == 8):
+                        addr, info = struct.unpack('<Ii', cur_ent_b)
+                        old_sym = info >> 8
+                        old_sym = 0
+                        info = (old_sym << 8) + (info & 0xFF)
+                        cur_ent_b = struct.pack('<Ii', addr, info)
+                    else:
+                        addr, info, addent = struct.unpack('<QqQ', cur_ent_b)
+                        old_sym = info >> 32
+                        old_sym = 0
+                        info = (old_sym << 32) + (info & 0xFFFFFFFF)
+                        cur_ent_b = struct.pack('<QqQ', addr, info, addent)
+
+                    self._f.seek(offset + ent_cnt * ent_size)
+                    self._f.write(cur_ent_b)
+
+                    # TODO - double values are possible -> libpython3.7.so.1.0
+                    #if(to_remove != -1):
+                    #    raise Exception("double value in rel.plt")
 
                 # case: entry_num > removed_entry -> count down sym_nr by 1
                 elif(reloc['r_info_sym'] > sym_nr):
@@ -267,46 +309,6 @@ class ELFRemove:
                     self._f.write(cur_ent_b)
                 ent_cnt += 1
 
-            if(to_remove != -1):
-                # TODO solution might be the size in dynamic segment
-                # TODO lib breaks when entries get displaced
-                #for cur_ent in range(to_remove, total_entries - 1):
-                #    self._f.seek(offset + (cur_ent + 1) * ent_size)
-                #    cur_ent_b = self._f.read(ent_size)
-                #    self._f.seek(offset + cur_ent * ent_size)
-                #    self._f.write(cur_ent_b)
-
-                #self._f.seek(offset + (ent_cnt + 1) * ent_size)
-                #cur_ent_b = self._f.read(ent_size)
-                #self._f.seek(offset + ent_cnt * ent_size)
-                #self._f.write(cur_ent_b)
-
-                # remove double last value
-                #self._f.seek(offset + (total_entries - 1) * ent_size)
-                #for count in range(0, ent_size):
-                #    pass
-                #   # TODO lib breaks when deletet entry overriden! header size?
-                #   #self._f.write(chr(0x0).encode('ascii'))
-                #self._change_section_size(self._rel_plt, ent_size)
-
-                # TODO temporary: set a placeholder entry with dynsym offset 0
-                self._f.seek(offset + to_remove * ent_size)
-                cur_ent_b = self._f.read(ent_size)
-                if(ent_size == 8):
-                    addr, info = struct.unpack('<Ii', cur_ent_b)
-                    old_sym = info >> 8
-                    old_sym = 0
-                    info = (old_sym << 8) + (info & 0xFF)
-                    cur_ent_b = struct.pack('<Ii', addr, info)
-                else:
-                    addr, info, addent = struct.unpack('<QqQ', cur_ent_b)
-                    old_sym = info >> 32
-                    old_sym = 0
-                    info = (old_sym << 32) + (info & 0xFFFFFFFF)
-                    cur_ent_b = struct.pack('<QqQ', addr, info, addent)
-
-                self._f.seek(offset + to_remove * ent_size)
-                self._f.write(cur_ent_b)
 
 
     '''
@@ -338,8 +340,8 @@ class ELFRemove:
             self._change_section_size(self._gnu_version, ent_size)
 
 
-
-    def test_hash(self):
+    # temporary test function
+    def test_hash_section(self):
         if(self._elf_hash != None):
             sect = HashSection(self._elffile.stream, self._elf_hash[0].header['sh_offset'], self._elffile)
             # print hash section
@@ -362,8 +364,6 @@ class ELFRemove:
                     cur_ptr = sect.params['chains'][cur_ptr]
                 if(found == 0):
                     raise Exception("Symbol not found in bucket!!! Hash Section broken!")
-
-
 
 
     def _edit_elf_hashtable(self, symbol_name, dynsym_nr, total_ent_sym):
@@ -597,6 +597,8 @@ class ELFRemove:
 
         for symbol in section[0].iter_symbols():
             entry_cnt += 1
+            if(symbol.name in self._blacklist):
+                continue
             if(complement):
                 if(symbol.name not in symbol_list):
                     size = symbol.entry['st_size']
@@ -626,6 +628,8 @@ class ELFRemove:
 
         for symbol in section[0].iter_symbols():
             entry_cnt += 1
+            if(symbol.name in self._blacklist):
+                continue
             # fix for section from dynamic segment
             if(complement):
                 if(symbol.entry['st_value'] not in address_list):
@@ -673,10 +677,15 @@ class ELFRemove:
                 if(section.name == '.text'):
                     size_of_text = section["sh_size"]
 
+            # create dict for unique address values
+            addr_dict = {}
+            for ent in collection:
+                addr_dict[ent[2]] = ent[3]
+
             total_b_rem = 0
-            for sym in collection:
+            for k, v in addr_dict.items():
                 #print(sym[0] + " ", end="", flush=True)
-                total_b_rem += sym[3]
+                total_b_rem += v
 
             dynsym_entrys = (self.dynsym[0].header['sh_size'] // self.dynsym[0].header['sh_entsize'])
 
@@ -689,6 +698,16 @@ class ELFRemove:
             else:
                 print(" Size of text Segment not given in section header")
 
+    def print_collection_addr(self, collection):
+        # create dictionary to ensure no double values
+        addr_dict = {}
+        for ent in collection:
+            addr_dict[ent[2]] = ent[3]
+
+        # sort by address
+        ordered = collections.OrderedDict(sorted(addr_dict.items()))
+        for k, v in ordered.items():
+            print(str(k) + " " + str(v))
 
     def get_collection_names(self, collection):
         symbols = []
