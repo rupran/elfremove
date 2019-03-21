@@ -13,6 +13,7 @@ parser = argparse.ArgumentParser(description='Remove unneccessary symbols of giv
 parser.add_argument('json', help='the json file from libtrader')
 parser.add_argument('-l', '--local', action="store_true", help='remove local functions')
 parser.add_argument('--lib', nargs='*', help='list of librarys to be processed, use all librarys from json file if not defined')
+parser.add_argument('--libonly', action="store_true", help='name of binary has to start with \'lib\'')
 parser.add_argument('--overwrite', action="store_true", help='overwrite original library files, otherwise work with a copy in the current working directory')
 parser.add_argument('-v', '--verbose', action="store_true", help='set verbosity')
 
@@ -46,6 +47,8 @@ def proc():
 
         # if no librarys where given -> use all
         if(args.lib and os.path.basename(lib.fullname) not in args.lib):
+            continue
+        if(args.libonly and not os.path.basename(lib.fullname).startswith("lib")):
             continue
 
         if(not args.overwrite):
@@ -119,10 +122,7 @@ def proc():
             collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab, elf_rem.get_collection_names(collection_dynsym))
 
         # display statistics
-        if(not args.verbose):
-            elf_rem.print_collection_info(collection_dynsym, False)
-        else:
-            elf_rem.print_collection_info(collection_dynsym, True)
+        elf_rem.print_collection_info(collection_dynsym, args.verbose)
 
         # remove symbols from file
         try:
