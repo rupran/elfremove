@@ -37,9 +37,9 @@ def proc():
     # create folder for tailored / original librarys
     directory = ""
     if(not args.overwrite):
-        directory = "./tailored_libs_" + os.path.basename(args.json)
+        directory = "./tailored_libs_" + os.path.basename(args.json) + '/'
     else:
-        directory = "./original_libs_" + os.path.basename(args.json)
+        directory = "./original_libs_" + os.path.basename(args.json) + '/'
     if not os.path.exists(directory):
         os.makedirs(directory)
 
@@ -51,12 +51,16 @@ def proc():
         if(args.libonly and not os.path.basename(lib.fullname).startswith("lib")):
             continue
 
+        filename = directory + lib.fullname
+
+        if(not os.path.isdir(os.path.dirname(filename))):
+            os.makedirs(os.path.dirname(filename))
+
         if(not args.overwrite):
-            print("\nTailoring library: " + directory + "/" + os.path.basename(lib.fullname))
+            print("\nTailoring library: " + filename)
         else:
             print("\nTailoring library: " + lib.fullname)
 
-        filename = directory + '/' + os.path.basename(lib.fullname)
 
         # copy library to folder
         if(not os.path.exists(filename)):
@@ -122,7 +126,7 @@ def proc():
             collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab, elf_rem.get_collection_names(collection_dynsym))
 
         # display statistics
-        elf_rem.print_collection_info(collection_dynsym, args.verbose)
+        elf_rem.print_collection_info(collection_dynsym, args.verbose, local)
 
         # remove symbols from file
         try:
