@@ -562,13 +562,14 @@ class ELFRemove:
             for count in range(0, section[0].header['sh_entsize']):
                 self._f.write(chr(0x0).encode('ascii'))
 
-            #### Overwrite function with null bytes ####
+            #### Overwrite function with zeros ####
             if(overwrite):
                 if symbol_t[2] != 0 and symbol_t[3] != 0:
-                    self._log('\t' + symbol_t[0] + ': overwriting text segment with null bytes')
+                    self._log('\t' + symbol_t[0] + ': overwriting text segment with zeros')
                     self._f.seek(symbol_t[2])
                     for count in range(0, symbol_t[3]):
-                        self._f.write(chr(0x0).encode('ascii'))
+                        #self._f.write(chr(0x0).encode('ascii'))
+                        self._f.write(b'\xcc')
             removed += 1;
             max_entrys -= 1
 
@@ -654,13 +655,28 @@ class ELFRemove:
     def overwrite_local_functions(self, func_tuple_list):
         for func in func_tuple_list:
             #### Overwrite function with null bytes ####
-            self._log('\t' + str(func[0]) + ': overwriting text segment of local function with null bytes')
+            self._log('\t' + str(func[0]) + ': overwriting text segment of local function')
             self._f.seek(func[0])
-            for count in range(0, func[1]):
-                self._f.write(chr(0x0).encode('ascii'))
 
-    def print_collection_info(self, collection, full=True):
+            for count in range(0, func[1]):
+                self._f.write(b'\xCC')
+
+        if(self.symtab != None):
+            addr = [x[0] for x in func_tuple_list]
+            collection = self.collect_symbols_by_address(self.symtab, addr)
+            self.remove_from_section(self.symtab, collection, overwrite=False)
+
+
+    def print_collection_info(self, collection, full=True, local=None):
         if(full):
+            if(local != None):
+                print('Local Functions: ' + str(len(collection)))
+                line = "{0:<10} | {1:<6}"
+                print(line.format("Address", "Size"))
+                print(16 * '-')
+                for func in local:
+                    print(line.format(func[0], func[1]))
+
             maxlen = 0
             for x in collection:
                 if(len(x[0]) > maxlen):
@@ -682,6 +698,10 @@ class ELFRemove:
             for ent in collection:
                 addr_dict[ent[2]] = ent[3]
 
+            if(local != None and len(local) > 0):
+                for func in local:
+                    addr_dict[func[0]] = func[1]
+
             total_b_rem = 0
             for k, v in addr_dict.items():
                 #print(sym[0] + " ", end="", flush=True)
@@ -689,20 +709,25 @@ class ELFRemove:
 
             dynsym_entrys = (self.dynsym[0].header['sh_size'] // self.dynsym[0].header['sh_entsize'])
 
-            print(" Total number of symbols in dynsym: " + str(dynsym_entrys))
-            print("     Nr of symbols to remove: " + str(len(collection)))
+            print("Total number of symbols in dynsym: " + str(dynsym_entrys))
+            print("    Nr of symbols to remove: " + str(len(collection)))
+            if(local != None and len(local) > 0):
+                print("    Nr of local functions to remove: " + str(len(local)))
             if(size_of_text != 0):
-                print(" Total size of text Segment: " + str(size_of_text))
-                print("     Nr of bytes overwritten: " + str(total_b_rem))
-                print("     Percentage of code overwritte: " + str((total_b_rem / size_of_text) * 100))
+                print("Total size of text Segment: " + str(size_of_text))
+                print("    Nr of bytes overwritten: " + str(total_b_rem))
+                print("    Percentage of code overwritte: " + str((total_b_rem / size_of_text) * 100))
             else:
-                print(" Size of text Segment not given in section header")
+                print("Size of text Segment not given in section header")
 
-    def print_collection_addr(self, collection):
+    def print_collection_addr(self, collection, local=None):
         # create dictionary to ensure no double values
         addr_dict = {}
         for ent in collection:
             addr_dict[ent[2]] = ent[3]
+        if(local != None and len(local) > 0):
+            for func in local:
+                addr_dict[func[0]] = func[1]
 
         # sort by address
         ordered = collections.OrderedDict(sorted(addr_dict.items()))
