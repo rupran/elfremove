@@ -15,6 +15,7 @@ parser.add_argument('-l', '--local', action="store_true", help='remove local fun
 parser.add_argument('--lib', nargs='*', help='list of librarys to be processed, use all librarys from json file if not defined')
 parser.add_argument('--libonly', action="store_true", help='name of binary has to start with \'lib\'')
 parser.add_argument('--addr_list', action="store_true", help='print list of addresses with size')
+parser.add_argument('--func_list', action="store_true", help='print list of functions')
 
 def log(mes):
     if(args.verbose):
@@ -80,9 +81,8 @@ def proc():
                     continue
                 if(key not in blacklist):
                     value = store[lib.fullname].local_users.get(key, [])
-                    if(not value and key == 594912):
+                    if(not value and store[lib.fullname].ranges[key] > 0):
                         local.append((key, store[lib.fullname].ranges[key]))
-            print(local)
 
         # collect the set of Symbols for given function names
         collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, addr)
@@ -91,10 +91,11 @@ def proc():
 
         # display statistics
         if(args.addr_list):
-            elf_rem.print_collection_addr(collection_dynsym)
+            elf_rem.print_collection_addr(collection_dynsym, local)
+        elif(args.func_list):
+            elf_rem.print_collection_info(collection_dynsym, True, local)
         else:
-            elf_rem.print_collection_info(collection_dynsym, True)
-            elf_rem.print_collection_info(collection_dynsym, False)
+            elf_rem.print_collection_info(collection_dynsym, False, local)
 
 if __name__ == '__main__':
     args = parser.parse_args()
