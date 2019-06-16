@@ -670,7 +670,7 @@ class ELFRemove:
     def print_collection_info(self, collection, full=True, local=None):
         if(full):
             if(local != None):
-                print('Local Functions: ' + str(len(collection)))
+                print('Local Functions: ' + str(len(local)))
                 line = "{0:<10} | {1:<6}"
                 print(line.format("Address", "Size"))
                 print(16 * '-')
@@ -720,6 +720,7 @@ class ELFRemove:
             else:
                 print("Size of text Segment not given in section header")
 
+            #print(" & " + str(dynsym_entrys) + " & " + str(len(collection)) + " & " + str(len(local)) + " & " + str(size_of_text) + " & " + str(total_b_rem) + " & " + str((total_b_rem / size_of_text) * 100) + "\\% \\\\")
     def print_collection_addr(self, collection, local=None):
         # create dictionary to ensure no double values
         addr_dict = {}
