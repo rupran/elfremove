@@ -125,6 +125,9 @@ class ELFRemove:
         if(self._debug):
             print('DEBUG: ' + mes)
 
+    '''
+    Hash-Functions for GNU and standard hash
+    '''
     def _elfhash(self, func_name):
         h = 0
         g = 0
@@ -144,6 +147,9 @@ class ELFRemove:
             h = h & 0xFFFFFFFF
         return h
 
+    '''
+    Helper functions for section-object creation
+    '''
     def _build_relocation_section(self, name, off, size, entsize, sec_type):
         return RelocationSection(self._build_header(off, size, entsize, name, sec_type), name, self._elffile)
 
@@ -193,7 +199,7 @@ class ELFRemove:
 
 
     '''
-    Function:   change_section_size
+    Function:   _change_section_size
     Parameter:  section = Tuple with section object and index (object, index)
                 size    = size in Bytes
 
@@ -227,6 +233,13 @@ class ELFRemove:
             self._f.write(value.to_bytes(4, sys.byteorder))
 
 
+    '''
+    Function:   _edit_rel_sect
+    Parameter:  section = Tuple with section object and index (object, index)
+                sym_nr  = index of removed entry in dynsym
+
+    Description: adapts the entries of the given relocation section to the changed dynsym
+    '''
     def _edit_rel_sect(self, section, sym_nr):
         if(section != None):
             ent_size = 0
@@ -339,7 +352,9 @@ class ELFRemove:
             # change section size in header
             self._change_section_size(self._gnu_version, ent_size)
 
-
+    '''
+    Helper function to test the consitency of the standard hash section
+    '''
     # temporary test function
     def test_hash_section(self):
         if(self._elf_hash != None):
@@ -366,6 +381,14 @@ class ELFRemove:
                     raise Exception("Symbol not found in bucket!!! Hash Section broken!")
 
 
+    '''
+    Function:   _edit_elf_hashtable
+    Parameter:  symbol_name   = name of the Symbol to be removed
+                dynsym_nr     = nr of the given symbol in the dynsym table
+                total_ent_sym = total entries of th dynsym section
+
+    Description: removes the given Symbol from the '.hash' section
+    '''
     def _edit_elf_hashtable(self, symbol_name, dynsym_nr, total_ent_sym):
         if(self._elf_hash != None):
             sect = HashSection(self._elffile.stream, self._elf_hash[0].header['sh_offset'], self._elffile)
@@ -430,7 +453,7 @@ class ELFRemove:
                 dynsym_nr     = nr of the given symbol in the dynsym table
                 total_ent_sym = total entries of th dynsym section
 
-    Description: removes the given Symbol from the 'gnu.hash' section
+    Description: removes the given Symbol from the '.gnu.hash' section
     '''
     def _edit_gnu_hashtable(self, symbol_name, dynsym_nr, total_ent_sym):
         if(self._gnu_hash != None):
@@ -579,7 +602,7 @@ class ELFRemove:
         return removed
 
     '''
-    Function:   collect_symbols_by_name
+    Function:   collect_symbols_by_name (and -_by_address)
     Parameter:  section     = symbol table to search in (self.symtab, self.dynsym)
                 symbol_list = list of symbol names to be collected
                 complement  = Boolean, True: all symbols except given list are collected
@@ -587,7 +610,7 @@ class ELFRemove:
                 NOTE: collection contains indices of Symbols -> all collections are invalidated
                       after symboltable changes.
 
-    Description: removes the symbols from the given section
+    Description: removes the symbols from the given symboltable
     '''
     def collect_symbols_by_name(self, section, symbol_list, complement=False):
         self._log('Searching in section: ' + section[0].name)
@@ -652,6 +675,12 @@ class ELFRemove:
                     found_symbols.append((symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section[2]))
         return found_symbols
 
+    '''
+    Function:   overwrite local functions
+    Parameter:  func_tuple_list = list of tupels with address and size information for to be removed local functions
+
+    Description: overwrites the given functions in the text segment and removes the entries from symtab if present
+    '''
     def overwrite_local_functions(self, func_tuple_list):
         for func in func_tuple_list:
             #### Overwrite function with null bytes ####
@@ -666,7 +695,14 @@ class ELFRemove:
             collection = self.collect_symbols_by_address(self.symtab, addr)
             self.remove_from_section(self.symtab, collection, overwrite=False)
 
+    '''
+    Function:   print_collection_info
+    Parameter:  collection = a collection of symbols returned from a collect_* function
+                full       = true - print all debug information, false - only a file statistic
+                local      = tuple list of local function which gets included in the statistics
 
+    Description: prints informations for the given collection of symbols
+    '''
     def print_collection_info(self, collection, full=True, local=None):
         if(full):
             if(local != None):
@@ -721,6 +757,10 @@ class ELFRemove:
                 print("Size of text Segment not given in section header")
 
             #print(" & " + str(dynsym_entrys) + " & " + str(len(collection)) + " & " + str(len(local)) + " & " + str(size_of_text) + " & " + str(total_b_rem) + " & " + str((total_b_rem / size_of_text) * 100) + "\\% \\\\")
+
+    '''
+    helper functions
+    '''
     def print_collection_addr(self, collection, local=None):
         # create dictionary to ensure no double values
         addr_dict = {}
