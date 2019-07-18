@@ -34,7 +34,9 @@ class ELFRemove:
         self._rel_plt = None
         self._rel_dyn = None
         self._elf_hash = None
+        self._dynamic = None
         self._blacklist = ["_init", "_fini"]
+        self._reloc_list = None
 
         #### check for supported architecture ####
         if(self._elffile.header['e_machine'] != 'EM_X86_64' and self._elffile.header['e_machine'] != 'EM_386'):
@@ -64,6 +66,9 @@ class ELFRemove:
             if(sect.name == '.rel.dyn' or sect.name == '.rela.dyn'):
                 self._log('    Found \'RELA_DYN\' section!')
                 self._rel_dyn = (sect, section_no, 0)
+            if(sect.name == '.dynamic'):
+                self._log('    Found \'DYNAMIC\' section!')
+                self._dynamic = (sect, section_no, 0)
             section_no += 1
 
         # fallback if section headers have been stripped from the binary
@@ -233,6 +238,23 @@ class ELFRemove:
             self._f.write(value.to_bytes(4, sys.byteorder))
 
 
+    def _shrink_dynamic_tag(self, target_tag, amount):
+        dynamic_section = self._dynamic[0]
+        relasz = [idx for idx, tag in enumerate(dynamic_section.iter_tags()) if tag['d_tag'] == target_tag]
+        if not relasz:
+            return
+        f_off = dynamic_section._offset + relasz[0] * dynamic_section._tagsize
+        self._f.seek(f_off)
+        val = self._f.read(dynamic_section._tagsize)
+        if dynamic_section._tagsize == 8:
+            struct_string = '<iI'
+        else:
+            struct_string = '<qQ'
+        tagno, sz = struct.unpack(struct_string, val)
+        new_val = struct.pack(struct_string, tagno, sz - amount)
+        self._f.seek(f_off)
+        self._f.write(new_val)
+
     '''
     Function:   _edit_rel_sect
     Parameter:  section = Tuple with section object and index (object, index)
@@ -240,88 +262,66 @@ class ELFRemove:
 
     Description: adapts the entries of the given relocation section to the changed dynsym
     '''
-    def _edit_rel_sect(self, section, sym_nr):
+    def _edit_rel_sect(self, section, sym_nr, sym_addr, push=False):
         if(section != None):
             ent_size = 0
             ent_cnt = 0
 
-            total_entries = section[0].num_relocations()
             offset = section[0].header['sh_offset']
-            to_remove = -1
 
             if(self._elffile.header['e_machine'] == 'EM_X86_64'):
                 ent_size = 24 # Elf64_rela struct size, x64 always rela?
             else:
                 ent_size = 8 # Elf32_rel struct size, x86 always rel
 
-            for reloc in section[0].iter_relocations():
-                # case: delete entry
-                if(reloc['r_info_sym'] == sym_nr):
-                    # TODO solution might be the size in dynamic segment
-                    # TODO lib breaks when entries get displaced
-                    #for cur_ent in range(to_remove, total_entries - 1):
-                    #    self._f.seek(offset + (cur_ent + 1) * ent_size)
-                    #    cur_ent_b = self._f.read(ent_size)
-                    #    self._f.seek(offset + cur_ent * ent_size)
-                    #    self._f.write(cur_ent_b)
-
-                    #self._f.seek(offset + (ent_cnt + 1) * ent_size)
-                    #cur_ent_b = self._f.read(ent_size)
-                    #self._f.seek(offset + ent_cnt * ent_size)
-                    #self._f.write(cur_ent_b)
-
-                    # remove double last value
-                    #self._f.seek(offset + (total_entries - 1) * ent_size)
-                    #for count in range(0, ent_size):
-                    #    pass
-                    #   # TODO lib breaks when deletet entry overriden! header size?
-                    #   #self._f.write(chr(0x0).encode('ascii'))
-                    #self._change_section_size(self._rel_plt, ent_size)
-
-                    # TODO temporary: set a placeholder entry with dynsym offset 0
-                    self._f.seek(offset + ent_cnt * ent_size)
-                    cur_ent_b = self._f.read(ent_size)
-                    if(ent_size == 8):
-                        addr, info = struct.unpack('<Ii', cur_ent_b)
-                        old_sym = info >> 8
-                        old_sym = 0
-                        info = (old_sym << 8) + (info & 0xFF)
-                        cur_ent_b = struct.pack('<Ii', addr, info)
+            if self._reloc_list is None:
+                self._reloc_list = list(section[0].iter_relocations())
+            reloc_list = self._reloc_list
+            cur_idx = 0
+            removed = 0
+            #print('list based removal for {}'.format(hex(sym_addr)))
+            while cur_idx < len(reloc_list):
+                reloc = reloc_list[cur_idx]
+                if reloc.entry['r_info_sym'] == sym_nr or reloc.entry['r_addend'] == sym_addr:
+                    if push:
+                        reloc_list.pop(cur_idx)
+                        removed += 1
+                        continue
                     else:
-                        addr, info, addent = struct.unpack('<QqQ', cur_ent_b)
-                        old_sym = info >> 32
-                        old_sym = 0
-                        info = (old_sym << 32) + (info & 0xFFFFFFFF)
-                        cur_ent_b = struct.pack('<QqQ', addr, info, addent)
-
-                    self._f.seek(offset + ent_cnt * ent_size)
-                    self._f.write(cur_ent_b)
-
-                    # TODO - double values are possible -> libpython3.7.so.1.0
-                    #if(to_remove != -1):
-                    #    raise Exception("double value in rel.plt")
-
-                # case: entry_num > removed_entry -> count down sym_nr by 1
-                elif(reloc['r_info_sym'] > sym_nr):
-                    self._f.seek(offset + ent_cnt * ent_size)
-                    cur_ent_b = self._f.read(ent_size)
-                    if(ent_size == 8):
-                        addr, info = struct.unpack('<Ii', cur_ent_b)
-                        old_sym = info >> 8
-                        old_sym -= 1
-                        info = (old_sym << 8) + (info & 0xFF)
-                        cur_ent_b = struct.pack('<Ii', addr, info)
+                        reloc.entry['r_info_sym'] = 0
+                        if ent_size == 24:
+                            reloc.entry['r_addend'] = 0
+                elif reloc.entry['r_info_sym'] > sym_nr:
+                    new_sym = reloc.entry['r_info_sym'] - 1
+                    old_type = reloc.entry['r_info_type']
+                    if ent_size == 8:
+                        reloc.entry['r_info'] = new_sym << 8 | (old_type & 0xFF)
                     else:
-                        addr, info, addent = struct.unpack('<QqQ', cur_ent_b)
-                        old_sym = info >> 32
-                        old_sym -= 1
-                        info = (old_sym << 32) + (info & 0xFFFFFFFF)
-                        cur_ent_b = struct.pack('<QqQ', addr, info, addent)
+                        reloc.entry['r_info'] = new_sym << 32 | (old_type & 0xFFFFFFFF)
+                    reloc.entry['r_info_sym'] = new_sym
 
-                    self._f.seek(offset + ent_cnt * ent_size)
-                    self._f.write(cur_ent_b)
-                ent_cnt += 1
+                cur_idx += 1
 
+            # Write whole section out at once
+            self._f.seek(offset)
+            for reloc in reloc_list:
+                if ent_size == 24:
+                    cur_val = struct.pack('<QqQ', reloc.entry['r_offset'],
+                                          reloc.entry['r_info'], reloc.entry['r_addend'])
+                else:
+                    cur_val = struct.pack('<Ii', reloc.entry['r_offset'],
+                                          reloc.entry['r_info'])
+                self._f.write(cur_val)
+
+            # Change the size in the section header
+            self._change_section_size(section, ent_size * removed)
+            # the following is needed in order to lower the number of relocations
+            # returned via iter_relocations() -> uses num_relocations() -> uses
+            # _size to calculate the number
+            section[0]._size -= (ent_size * removed)
+
+            # Shrink the number of relocation entries in the DYNAMIC segment
+            self._shrink_dynamic_tag('DT_RELASZ', ent_size * removed)
 
 
     '''
@@ -568,8 +568,9 @@ class ELFRemove:
                 self._edit_gnu_hashtable(symbol_t[0], symbol_t[1], max_entrys)
                 self._edit_elf_hashtable(symbol_t[0], symbol_t[1], max_entrys)
                 self._edit_gnu_versions(symbol_t[1], max_entrys)
-                self._edit_rel_sect(self._rel_plt, symbol_t[1])
-                self._edit_rel_sect(self._rel_dyn, symbol_t[1])
+                self._edit_rel_sect(self._rel_plt, symbol_t[1], symbol_t[2])
+                self._reloc_list = None
+                self._edit_rel_sect(self._rel_dyn, symbol_t[1], symbol_t[2], push=True)
 
             self._log('\t' + symbol_t[0] + ': deleting table entry')
 
