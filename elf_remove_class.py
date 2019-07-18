@@ -27,6 +27,7 @@ class ELFRemove:
         self._debug = debug
         self._f = open(filename, 'r+b', buffering=0)
         self._elffile = ELFFile(self._f)
+        self._byteorder = 'little' if self._elffile.little_endian else 'big'
         self._gnu_hash = None
         self.dynsym = None
         self.symtab = None
@@ -220,22 +221,22 @@ class ELFRemove:
             # 64 Bit - seek to current section header + offset to size of section
             self._f.seek(off_to_head + 32)
             size_bytes = self._f.read(8)
-            value = int.from_bytes(size_bytes, sys.byteorder, signed=False)
+            value = int.from_bytes(size_bytes, self._byteorder, signed=False)
             if value < size:
                 raise Exception('Size of section broken! Section: ' + section[0].name + ' Size: ' + value)
             value -= size
             self._f.seek(off_to_head + 32)
-            self._f.write(value.to_bytes(8, sys.byteorder))
+            self._f.write(value.to_bytes(8, self._byteorder))
         elif(self._elffile.header['e_machine'] == 'EM_386'):
             # 32 Bit
             self._f.seek(off_to_head + 20)
             size_bytes = self._f.read(4)
-            value = int.from_bytes(size_bytes, sys.byteorder, signed=False)
+            value = int.from_bytes(size_bytes, self._byteorder, signed=False)
             if value <= size:
                 raise Exception('Size of section broken')
             value -= size
             self._f.seek(off_to_head + 20)
-            self._f.write(value.to_bytes(4, sys.byteorder))
+            self._f.write(value.to_bytes(4, self._byteorder))
 
 
     def _shrink_dynamic_tag(self, target_tag, amount):
@@ -246,10 +247,11 @@ class ELFRemove:
         f_off = dynamic_section._offset + relasz[0] * dynamic_section._tagsize
         self._f.seek(f_off)
         val = self._f.read(dynamic_section._tagsize)
+        struct_string = '<' if self._byteorder == 'little' else '>'
         if dynamic_section._tagsize == 8:
-            struct_string = '<iI'
+            struct_string += 'iI'
         else:
-            struct_string = '<qQ'
+            struct_string += 'qQ'
         tagno, sz = struct.unpack(struct_string, val)
         new_val = struct.pack(struct_string, tagno, sz - amount)
         self._f.seek(f_off)
@@ -304,12 +306,13 @@ class ELFRemove:
 
             # Write whole section out at once
             self._f.seek(offset)
+            endianness = '<' if self._byteorder == 'little' else '>'
             for reloc in reloc_list:
                 if ent_size == 24:
-                    cur_val = struct.pack('<QqQ', reloc.entry['r_offset'],
+                    cur_val = struct.pack(endianness + 'QqQ', reloc.entry['r_offset'],
                                           reloc.entry['r_info'], reloc.entry['r_addend'])
                 else:
-                    cur_val = struct.pack('<Ii', reloc.entry['r_offset'],
+                    cur_val = struct.pack(endianness + 'Ii', reloc.entry['r_offset'],
                                           reloc.entry['r_info'])
                 self._f.write(cur_val)
 
@@ -431,19 +434,19 @@ class ELFRemove:
             # write to file
             #  - nchain
             self._f.seek(self._elf_hash[0].header['sh_offset'] +  4)
-            self._f.write(sect.params['nchains'].to_bytes(4, sys.byteorder))
+            self._f.write(sect.params['nchains'].to_bytes(4, self._byteorder))
 
             # - buckets
             buckets_start = self._elf_hash[0].header['sh_offset'] + 8
             for i in range(0, sect.params['nbuckets']):
                 self._f.seek(buckets_start + i * 4)
-                self._f.write(sect.params['buckets'][i].to_bytes(4, sys.byteorder))
+                self._f.write(sect.params['buckets'][i].to_bytes(4, self._byteorder))
 
             # - chains
             chains_start = self._elf_hash[0].header['sh_offset'] + 8 + sect.params['nbuckets'] * 4
             for i in range(0, sect.params['nchains']):
                 self._f.seek(chains_start + i * 4)
-                self._f.write(sect.params['chains'][i].to_bytes(4, sys.byteorder))
+                self._f.write(sect.params['chains'][i].to_bytes(4, self._byteorder))
 
 
 
@@ -467,10 +470,10 @@ class ELFRemove:
             bloomsize_b = self._f.read(4)
             #bloomshift_b = f.read(4)
 
-            nbuckets = int.from_bytes(nbuckets_b, sys.byteorder, signed=False)
-            symoffset = int.from_bytes(symoffset_b, sys.byteorder, signed=False)
-            bloomsize = int.from_bytes(bloomsize_b, sys.byteorder, signed=False)
-            #bloomshift = int.from_bytes(bloomshift_b, sys.byteorder, signed=False)
+            nbuckets = int.from_bytes(nbuckets_b, self._byteorder, signed=False)
+            symoffset = int.from_bytes(symoffset_b, self._byteorder, signed=False)
+            bloomsize = int.from_bytes(bloomsize_b, self._byteorder, signed=False)
+            #bloomshift = int.from_bytes(bloomshift_b, self._byteorder, signed=False)
 
             #bloom_hex = self._f.read(bloomsize * 8)
 
@@ -485,13 +488,13 @@ class ELFRemove:
             for cur_bucket in range(bucket_nr, nbuckets - 1):
                 self._f.seek(bucket_offset + (cur_bucket + 1) * 4)
                 bucket_start_b = self._f.read(4)
-                bucket_start = int.from_bytes(bucket_start_b, sys.byteorder, signed=False)
+                bucket_start = int.from_bytes(bucket_start_b, self._byteorder, signed=False)
                 # TODO: why is this possible (libcurl.so.4.5.0 - remove all)
                 if(bucket_start == 0):
                     continue
                 bucket_start -= 1
                 self._f.seek(bucket_offset + (cur_bucket + 1) * 4)
-                self._f.write(bucket_start.to_bytes(4, sys.byteorder))
+                self._f.write(bucket_start.to_bytes(4, self._byteorder))
 
             ### remove deletet entry from bucket ###
             # check hash
@@ -501,7 +504,7 @@ class ELFRemove:
             self._f.seek(bucket_offset + nbuckets * 4 + sym_nr * 4)
             bucket_hash_b = self._f.read(4)
 
-            bucket_hash = int.from_bytes(bucket_hash_b, sys.byteorder, signed=False)
+            bucket_hash = int.from_bytes(bucket_hash_b, self._byteorder, signed=False)
 
             # if this happens, sth on the library or hash function is broken!
             if((bucket_hash & ~0x1) != (func_hash & ~0x1)):
@@ -524,11 +527,11 @@ class ELFRemove:
             if((bucket_hash & 0x1) == 1 and sym_nr != 0):
                 self._f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
                 new_tail_b = self._f.read(4)
-                new_tail = int.from_bytes(new_tail_b, sys.byteorder, signed=False)
+                new_tail = int.from_bytes(new_tail_b, self._byteorder, signed=False)
                 # set with 'or' if already set
                 new_tail = new_tail ^ 0x00000001
                 self._f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
-                self._f.write(new_tail.to_bytes(4, sys.byteorder))
+                self._f.write(new_tail.to_bytes(4, self._byteorder))
 
             # change section size in header
             self._change_section_size(self._gnu_hash, 4)
