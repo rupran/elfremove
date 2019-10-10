@@ -50,11 +50,7 @@ script can be used.
 The script loads a Librarystore-Object created by librarytrader and tailors the including
 files according to the analysis results.
 
-**Output**:
-
-As a result the removed Symbols or the statistics for each file is given.
-
-## USAGE
+**Usage:**
 
 ```
 ./remove_tool_libtrader.py [-h] [-l] [--lib [LIB [LIB ...]]] [--libonly] [--overwrite] [-v] json
@@ -72,3 +68,7 @@ optional arguments:
                         a copy in the current working directory
   -v, --verbose         set verbosity
 ```
+
+**Output**:
+
+As a result the removed Symbols or the statistics for each file is given.
