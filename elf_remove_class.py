@@ -87,6 +87,41 @@ class ELFRemove:
                 self._dynamic = SectionWrapper(sect, section_no, 0)
             section_no += 1
 
+        if not self.symtab:
+            import os
+            DEBUG_DIR = os.path.join(os.sep, 'usr', 'lib', 'debug', 'lib', 'x86_64-linux-gnu')
+            BUILDID_DIR = os.path.join(os.sep, DEBUG_DIR, '.build-id')
+            paths = [os.path.join(DEBUG_DIR, os.path.basename(filename))]
+            id_section = self._elffile.get_section_by_name('.note.gnu.build-id')
+            if not id_section:
+                print('no id_section')
+                return
+
+            for note in id_section.iter_notes():
+                if note['n_type'] != 'NT_GNU_BUILD_ID':
+                    continue
+                build_id = note['n_desc']
+                paths.insert(0, os.path.join(BUILDID_DIR,
+                                             build_id[:2],
+                                             build_id[2:] + '.debug'))
+            for path in paths:
+                if not os.path.isfile(path):
+                    print('no path {}'.format(path))
+                    continue
+                try:
+                    external_elf = ELFFile(open(path, 'rb'))
+                    self.symtab = SectionWrapper(external_elf.get_section_by_name('.symtab'), -1, 0)
+#                    logging.debug('Found external symtab for %s at %s',
+#                                  filename, path)
+                    break
+                except (ELFError, OSError) as err:
+#                    logging.debug('Failed to open external symbol table for %s at %s: %s',
+#                                  filename, path, err)
+                    continue
+        if self.symtab:
+            print('SYMTAB!')
+
+
         # fallback if section headers have been stripped from the binary
         if(self.dynsym == None and self.symtab == None):
             self._log("No section headers found in ELF, fallback to dynamic segment!")
