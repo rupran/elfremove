@@ -724,7 +724,8 @@ class ELFRemove:
                 if(symbol.entry['st_value'] in address_list):
                     size = symbol.entry['st_size']
                     # Symbol not a function -> next
-                    if(symbol['st_info']['type'] != 'STT_FUNC' or symbol['st_info']['bind'] == 'STB_WEAK' or size == 0):
+                    #if(symbol['st_info']['type'] != 'STT_FUNC' or symbol['st_info']['bind'] == 'STB_WEAK' or size == 0):
+                    if(symbol['st_info']['type'] != 'STT_FUNC' or size == 0): #symbol['st_info']['bind'] == 'STB_WEAK' or size == 0):
                         continue
                     # add all symbols to remove to the return list
                     # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
