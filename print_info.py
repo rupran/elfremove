@@ -48,7 +48,10 @@ def proc():
 
         # open library file as ELFRemove object
         elf_rem = None
-        elf_rem = ELFRemove(filename)
+        try:
+            elf_rem = ELFRemove(filename)
+        except:
+            continue
 
         if(elf_rem.dynsym == None):
             print('dynsym table not found in File!')
