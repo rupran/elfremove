@@ -12,6 +12,21 @@ from elftools.elf.dynamic import DynamicSegment
 from elftools.elf.enums import ENUM_D_TAG_COMMON
 from elftools.elf.hash import HashSection
 
+class SectionWrapper:
+
+    def __init__(self, section, index, version):
+        self.section = section
+        self.index = index
+        self.version = version
+
+class SymbolWrapper:
+
+    def __init__(self, name, count, value, size, sec_version):
+        self.name = name
+        self.count = count
+        self.value = value
+        self.size = size
+        self.sec_version = sec_version
 
 class ELFRemove:
 
@@ -48,28 +63,28 @@ class ELFRemove:
         for sect in self._elffile.iter_sections():
             if(sect.name == '.gnu.hash'):
                 self._log('    Found \'GNU_HASH\' section!')
-                self._gnu_hash = (sect, section_no, 0)
+                self._gnu_hash = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.hash'):
                 self._log('    Found \'HASH\' section!')
-                self._elf_hash = (sect, section_no, 0)
+                self._elf_hash = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.dynsym'):
                 self._log('    Found \'DYNSYM\' section!')
-                self.dynsym = (sect, section_no, 0)
+                self.dynsym = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.symtab'):
                 self._log('    Found \'SYMTAB\' section!')
-                self.symtab = (sect, section_no, 0)
+                self.symtab = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.gnu.version'):
                 self._log('    Found \'GNU_VERSION\' section!')
-                self._gnu_version = (sect, section_no, 0)
+                self._gnu_version = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.rel.plt' or sect.name == '.rela.plt'):
                 self._log('    Found \'RELA_PLT\' section!')
-                self._rel_plt = (sect, section_no, 0)
+                self._rel_plt = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.rel.dyn' or sect.name == '.rela.dyn'):
                 self._log('    Found \'RELA_DYN\' section!')
-                self._rel_dyn = (sect, section_no, 0)
+                self._rel_dyn = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.dynamic'):
                 self._log('    Found \'DYNAMIC\' section!')
-                self._dynamic = (sect, section_no, 0)
+                self._dynamic = SectionWrapper(sect, section_no, 0)
             section_no += 1
 
         # fallback if section headers have been stripped from the binary
@@ -81,7 +96,7 @@ class ELFRemove:
                     # try to build symtab section from dynamic segment information
                     size = seg.num_symbols() * seg.elfstructs.Elf_Sym.sizeof()
                     _, offset = seg.get_table_offset('DT_SYMTAB')
-                    self.dynsym = (self._build_symtab_section('.dynsym', offset, size, seg.elfstructs.Elf_Sym.sizeof(), seg._get_stringtable()), -1, 0)
+                    self.dynsym = SectionWrapper(self._build_symtab_section('.dynsym', offset, size, seg.elfstructs.Elf_Sym.sizeof(), seg._get_stringtable()), -1, 0)
                     self._log('    Found \'DYNSYM\' section!')
 
                     # search for all supported sections and build section object with needed entries
@@ -90,16 +105,16 @@ class ELFRemove:
                         if(tag['d_tag'] == "DT_GNU_HASH"):
                             self._log('    Found \'GNU_HASH\' section!')
                             _, offset = seg.get_table_offset(tag['d_tag'])
-                            self._gnu_hash = ((self._build_section('.gnu.hash', offset, -1, 0, 0)), -1, 0)
+                            self._gnu_hash = SectionWrapper((self._build_section('.gnu.hash', offset, -1, 0, 0)), -1, 0)
                         if(tag['d_tag'] == "DT_HASH"):
                             self._log('    Found \'HASH\' section!')
                             _, offset = seg.get_table_offset(tag['d_tag'])
-                            self._elf_hash = ((self._build_section('.hash', offset, -1, 0, 0)), -1, 0)
+                            self._elf_hash = SectionWrapper((self._build_section('.hash', offset, -1, 0, 0)), -1, 0)
                         if(tag['d_tag'] == "DT_VERSYM"):
                             self._log('    Found \'GNU_VERSION\' section!')
                             size = seg.num_symbols() * 2
                             _, offset = seg.get_table_offset(tag['d_tag'])
-                            self._gnu_version = (self._build_section('.gnu.version', offset, size, 2, 0), -1, 0)
+                            self._gnu_version = SectionWrapper(self._build_section('.gnu.version', offset, size, 2, 0), -1, 0)
 
                         if(tag['d_tag'] == "DT_JMPREL"):
                             _, rel_plt_off = seg.get_table_offset(tag['d_tag'])
@@ -118,10 +133,10 @@ class ELFRemove:
 
                     if(rel_plt_off != 0 and rel_plt_size != 0):
                         self._log('    Found \'' + sec_out_name + 'PLT\' section!')
-                        self._rel_plt = (self._build_relocation_section(sec_name + 'plt', rel_plt_off, rel_plt_size, ent_size, sec_type), -1, 0)
+                        self._rel_plt = SectionWrapper(self._build_relocation_section(sec_name + 'plt', rel_plt_off, rel_plt_size, ent_size, sec_type), -1, 0)
                     if(rel_dyn_off != 0 and rel_dyn_size != 0):
                         self._log('    Found \'' + sec_out_name + 'DYN\' section!')
-                        self._rel_dyn = (self._build_relocation_section(sec_name + 'dyn', rel_dyn_off, rel_dyn_size, ent_size, sec_type), -1, 0)
+                        self._rel_dyn = SectionWrapper(self._build_relocation_section(sec_name + 'dyn', rel_dyn_off, rel_dyn_size, ent_size, sec_type), -1, 0)
 
 
     def __del__(self):
@@ -213,17 +228,17 @@ class ELFRemove:
     '''
     def _change_section_size(self, section, size):
         # can't change section header f no header in elffile
-        if(section[1] == -1):
+        if(section.index == -1):
             return
         head_entsize = self._elffile['e_shentsize']
-        off_to_head = self._elffile['e_shoff'] + (head_entsize * section[1])
+        off_to_head = self._elffile['e_shoff'] + (head_entsize * section.index)
         if(self._elffile.header['e_machine'] == 'EM_X86_64'):
             # 64 Bit - seek to current section header + offset to size of section
             self._f.seek(off_to_head + 32)
             size_bytes = self._f.read(8)
             value = int.from_bytes(size_bytes, self._byteorder, signed=False)
             if value < size:
-                raise Exception('Size of section broken! Section: ' + section[0].name + ' Size: ' + value)
+                raise Exception('Size of section broken! Section: ' + section.section.name + ' Size: ' + value)
             value -= size
             self._f.seek(off_to_head + 32)
             self._f.write(value.to_bytes(8, self._byteorder))
@@ -240,7 +255,7 @@ class ELFRemove:
 
 
     def _shrink_dynamic_tag(self, target_tag, amount):
-        dynamic_section = self._dynamic[0]
+        dynamic_section = self._dynamic.section
         relasz = [idx for idx, tag in enumerate(dynamic_section.iter_tags()) if tag['d_tag'] == target_tag]
         if not relasz:
             return
@@ -269,7 +284,7 @@ class ELFRemove:
             ent_size = 0
             ent_cnt = 0
 
-            offset = section[0].header['sh_offset']
+            offset = section.section.header['sh_offset']
 
             if(self._elffile.header['e_machine'] == 'EM_X86_64'):
                 ent_size = 24 # Elf64_rela struct size, x64 always rela?
@@ -277,7 +292,7 @@ class ELFRemove:
                 ent_size = 8 # Elf32_rel struct size, x86 always rel
 
             if self._reloc_list is None:
-                self._reloc_list = list(section[0].iter_relocations())
+                self._reloc_list = list(section.section.iter_relocations())
             reloc_list = self._reloc_list
             cur_idx = 0
             removed = 0
@@ -321,7 +336,7 @@ class ELFRemove:
             # the following is needed in order to lower the number of relocations
             # returned via iter_relocations() -> uses num_relocations() -> uses
             # _size to calculate the number
-            section[0]._size -= (ent_size * removed)
+            section.section._size -= (ent_size * removed)
 
             # Shrink the number of relocation entries in the DYNAMIC segment
             self._shrink_dynamic_tag('DT_RELASZ', ent_size * removed)
@@ -338,7 +353,7 @@ class ELFRemove:
         # should be the same for 32-Bit
         if(self._gnu_version != None):
             ent_size = 2 # 2 Bytes for each entry (Elf32_half & Elf64_half)
-            offset = self._gnu_version[0].header['sh_offset']
+            offset = self._gnu_version.section.header['sh_offset']
 
             # copy all following entries up by one
             for cur_ent in range(dynsym_nr, total_sym_cnt):
@@ -361,21 +376,21 @@ class ELFRemove:
     # temporary test function
     def test_hash_section(self):
         if(self._elf_hash != None):
-            sect = HashSection(self._elffile.stream, self._elf_hash[0].header['sh_offset'], self._elffile)
+            sect = HashSection(self._elffile.stream, self._elf_hash.section.header['sh_offset'], self._elffile)
             # print hash section
             for i in range (0, sect.params['nchains']):
-                print(self.dynsym[0].get_symbol(i).name)
+                print(self.dynsym.section.get_symbol(i).name)
 
             # find every symbol in hash table
-            for i in range(1, self.dynsym[0].num_symbols()):
-                name = self.dynsym[0].get_symbol(i).name
+            for i in range(1, self.dynsym.section.num_symbols()):
+                name = self.dynsym.section.get_symbol(i).name
                 print("Check hash of symbol: " + name)
                 sym_hash = self._elfhash(name)
                 bucket = sym_hash % sect.params['nbuckets']
                 cur_ptr = sect.params['buckets'][bucket]
                 found = 0
                 while(cur_ptr != 0):
-                    if(self.dynsym[0].get_symbol(cur_ptr).name == name):
+                    if(self.dynsym.section.get_symbol(cur_ptr).name == name):
                         print("     Found!")
                         found = 1
                         break
@@ -394,7 +409,7 @@ class ELFRemove:
     '''
     def _edit_elf_hashtable(self, symbol_name, dynsym_nr, total_ent_sym):
         if(self._elf_hash != None):
-            sect = HashSection(self._elffile.stream, self._elf_hash[0].header['sh_offset'], self._elffile)
+            sect = HashSection(self._elffile.stream, self._elf_hash.section.header['sh_offset'], self._elffile)
             func_hash = self._elfhash(symbol_name)
             bucket_nr = func_hash % sect.params['nbuckets']
             self._log("\t" + symbol_name + ': adjust hash_section, hash = ' + hex(func_hash) + ' bucket = ' + str(bucket_nr))
@@ -433,17 +448,17 @@ class ELFRemove:
             # TODO -> do this just once when all changes have been made
             # write to file
             #  - nchain
-            self._f.seek(self._elf_hash[0].header['sh_offset'] +  4)
+            self._f.seek(self._elf_hash.section.header['sh_offset'] +  4)
             self._f.write(sect.params['nchains'].to_bytes(4, self._byteorder))
 
             # - buckets
-            buckets_start = self._elf_hash[0].header['sh_offset'] + 8
+            buckets_start = self._elf_hash.section.header['sh_offset'] + 8
             for i in range(0, sect.params['nbuckets']):
                 self._f.seek(buckets_start + i * 4)
                 self._f.write(sect.params['buckets'][i].to_bytes(4, self._byteorder))
 
             # - chains
-            chains_start = self._elf_hash[0].header['sh_offset'] + 8 + sect.params['nbuckets'] * 4
+            chains_start = self._elf_hash.section.header['sh_offset'] + 8 + sect.params['nbuckets'] * 4
             for i in range(0, sect.params['nchains']):
                 self._f.seek(chains_start + i * 4)
                 self._f.write(sect.params['chains'][i].to_bytes(4, self._byteorder))
@@ -464,7 +479,7 @@ class ELFRemove:
             if(self._elffile.header['e_machine'] == 'EM_386'):
                 bloom_entry = 4
 
-            self._f.seek(self._gnu_hash[0].header['sh_offset'])
+            self._f.seek(self._gnu_hash.section.header['sh_offset'])
             nbuckets_b = self._f.read(4)
             symoffset_b = self._f.read(4)
             bloomsize_b = self._f.read(4)
@@ -482,7 +497,7 @@ class ELFRemove:
             bucket_nr = func_hash % nbuckets
             self._log("\t" + symbol_name + ': adjust gnu_hash_section, hash = ' + hex(func_hash) + ' bucket = ' + str(bucket_nr))
 
-            bucket_offset = self._gnu_hash[0].header['sh_offset'] + 4 * 4 + bloomsize * bloom_entry
+            bucket_offset = self._gnu_hash.section.header['sh_offset'] + 4 * 4 + bloomsize * bloom_entry
 
             ### Set new Bucket start values ###
             for cur_bucket in range(bucket_nr, nbuckets - 1):
@@ -552,57 +567,59 @@ class ELFRemove:
 
         if(len(collection) == 0):
             return
-
+#    def __init__(self, name, count, value, size, sec_version):
         # sort list by offset in symbol table
         # otherwise the index would be wrong after one Element was removed
-        sorted_list = sorted(collection, reverse=True, key=lambda x: x[1])
+        sorted_list = sorted(collection, reverse=True, key=lambda x: x.count)
 
         removed = 0
-        max_entrys = (section[0].header['sh_size'] // section[0].header['sh_entsize'])
+        max_entrys = (section.section.header['sh_size'] // section.section.header['sh_entsize'])
 
-        self._log('In \'' + section[0].name + '\' section:')
+        self._log('In \'' + section.section.name + '\' section:')
         for symbol_t in sorted_list:
             # check if section was changed between the collection and removal of Symbols
-            if(symbol_t[4] != section[2]):
-                raise Exception('symbol_collection was generated for older revision of ' + section[0].name)
+            if(symbol_t.sec_version != section.version):
+                raise Exception('symbol_collection was generated for older revision of ' + section.section.name)
             #### Overwrite Symbol Table entry ####
             # edit gnu_hash table, gnu_versions and relocation table but only for dynsym section
-            if(section[0].name == '.dynsym'):
-                self._edit_gnu_hashtable(symbol_t[0], symbol_t[1], max_entrys)
-                self._edit_elf_hashtable(symbol_t[0], symbol_t[1], max_entrys)
-                self._edit_gnu_versions(symbol_t[1], max_entrys)
-                self._edit_rel_sect(self._rel_plt, symbol_t[1], symbol_t[2])
+            if(section.section.name == '.dynsym'):
+                self._edit_gnu_hashtable(symbol_t.name, symbol_t.count, max_entrys)
+                self._edit_elf_hashtable(symbol_t.name, symbol_t.count, max_entrys)
+                self._edit_gnu_versions(symbol_t.count, max_entrys)
+                self._edit_rel_sect(self._rel_plt, symbol_t.count, symbol_t.value)
                 self._reloc_list = None
-                self._edit_rel_sect(self._rel_dyn, symbol_t[1], symbol_t[2], push=True)
+                self._edit_rel_sect(self._rel_dyn, symbol_t.count, symbol_t.value, push=True)
 
-            self._log('\t' + symbol_t[0] + ': deleting table entry')
+            self._log('\t' + symbol_t.name + ': deleting table entry')
 
-            # push up all entrys
-            for cur_entry in range(symbol_t[1] + 1, max_entrys):
-                self._f.seek(section[0].header['sh_offset'] + (cur_entry * section[0].header['sh_entsize']))
-                read_bytes = self._f.read(section[0].header['sh_entsize'])
-                self._f.seek(section[0].header['sh_offset'] + ((cur_entry - 1) * section[0].header['sh_entsize']))
-                self._f.write(read_bytes)
+            # Only write to file if the section is actually part of the file
+            if section.index != -1:
+                # push up all entrys
+                for cur_entry in range(symbol_t.count + 1, max_entrys):
+                    self._f.seek(section.section.header['sh_offset'] + (cur_entry * section.section.header['sh_entsize']))
+                    read_bytes = self._f.read(section.section.header['sh_entsize'])
+                    self._f.seek(section.section.header['sh_offset'] + ((cur_entry - 1) * section.section.header['sh_entsize']))
+                    self._f.write(read_bytes)
 
-            # last entry -> set to 0x0
-            self._f.seek(section[0].header['sh_offset'] + ((max_entrys - 1) * section[0].header['sh_entsize']))
-            for count in range(0, section[0].header['sh_entsize']):
-                self._f.write(chr(0x0).encode('ascii'))
+                # last entry -> set to 0x0
+                self._f.seek(section.section.header['sh_offset'] + ((max_entrys - 1) * section.section.header['sh_entsize']))
+                for count in range(0, section.section.header['sh_entsize']):
+                    self._f.write(chr(0x0).encode('ascii'))
 
             #### Overwrite function with zeros ####
             if(overwrite):
-                if symbol_t[2] != 0 and symbol_t[3] != 0:
-                    self._log('\t' + symbol_t[0] + ': overwriting text segment with zeros')
-                    self._f.seek(symbol_t[2])
-                    for count in range(0, symbol_t[3]):
+                if symbol_t.value != 0 and symbol_t.size != 0:
+                    self._log('\t' + symbol_t.name + ': overwriting text segment with zeros')
+                    self._f.seek(symbol_t.value)
+                    for count in range(0, symbol_t.size):
                         #self._f.write(chr(0x0).encode('ascii'))
                         self._f.write(b'\xcc')
             removed += 1;
             max_entrys -= 1
 
 
-        self._change_section_size(section, removed * section[0].header['sh_entsize'])
-        section = (section[0], section[1], section[2] + 1)
+        self._change_section_size(section, removed * section.section.header['sh_entsize'])
+        section = SectionWrapper(section.section, section.index, section.version + 1)
         return removed
 
     '''
@@ -617,13 +634,13 @@ class ELFRemove:
     Description: removes the symbols from the given symboltable
     '''
     def collect_symbols_by_name(self, section, symbol_list, complement=False):
-        self._log('Searching in section: ' + section[0].name)
+        self._log('Searching in section: ' + section.section.name)
 
         #### Search for function in Symbol Table ####
         entry_cnt = -1
         found_symbols = []
 
-        for symbol in section[0].iter_symbols():
+        for symbol in section.section.iter_symbols():
             entry_cnt += 1
             if(symbol.name in self._blacklist):
                 continue
@@ -635,7 +652,7 @@ class ELFRemove:
                         continue
                     # add all symbols to remove to the return list
                     # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
-                    found_symbols.append((symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section[2]))
+                    found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section.version))
             else:
                 if(symbol.name in symbol_list):
                     size = symbol.entry['st_size']
@@ -644,17 +661,17 @@ class ELFRemove:
                         continue
                     # add all symbols to remove to the return list
                     # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
-                    found_symbols.append((symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section[2]))
+                    found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section.version))
         return found_symbols
 
     def collect_symbols_by_address(self, section, address_list, complement=False):
-        self._log('Searching in section: ' + section[0].name)
+        self._log('Searching in section: ' + section.section.name)
 
         #### Search for function in Symbol Table ####
         entry_cnt = -1
         found_symbols = []
 
-        for symbol in section[0].iter_symbols():
+        for symbol in section.section.iter_symbols():
             entry_cnt += 1
             if(symbol.name in self._blacklist):
                 continue
@@ -667,7 +684,7 @@ class ELFRemove:
                         continue
                     # add all symbols to remove to the return list
                     # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
-                    found_symbols.append((symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section[2]))
+                    found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section.version))
             else:
                 if(symbol.entry['st_value'] in address_list):
                     size = symbol.entry['st_size']
@@ -676,7 +693,7 @@ class ELFRemove:
                         continue
                     # add all symbols to remove to the return list
                     # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
-                    found_symbols.append((symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section[2]))
+                    found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section.version))
         return found_symbols
 
     '''
@@ -686,16 +703,17 @@ class ELFRemove:
     Description: overwrites the given functions in the text segment and removes the entries from symtab if present
     '''
     def overwrite_local_functions(self, func_tuple_list):
-        for func in func_tuple_list:
+        for start, size in func_tuple_list:
             #### Overwrite function with null bytes ####
-            self._log('\t' + str(func[0]) + ': overwriting text segment of local function')
-            self._f.seek(func[0])
+            self._log('\t' + str(start) + ': overwriting text segment of local function')
+            #self._edit_rel_sect(self._rel_dyn, 0xffffffff, func.name, push=True)
+            self._f.seek(start)
 
-            for count in range(0, func[1]):
+            for count in range(0, size):
                 self._f.write(b'\xCC')
 
         if(self.symtab != None):
-            addr = [x[0] for x in func_tuple_list]
+            addr = [start for start, size in func_tuple_list]
             collection = self.collect_symbols_by_address(self.symtab, addr)
             self.remove_from_section(self.symtab, collection, overwrite=False)
 
@@ -719,14 +737,14 @@ class ELFRemove:
 
             maxlen = 0
             for x in collection:
-                if(len(x[0]) > maxlen):
-                    maxlen = len(x[0])
+                if(len(x.name) > maxlen):
+                    maxlen = len(x.name)
             print('Symbols in collection: ' + str(len(collection)))
             line = "{0:<" + str(maxlen) + "} | {1:<8} | {2:<10} | {3:<6} | {4:<6}"
             print(line.format("Name", "Offset", "StartAddr", "Size", "Rev."))
             print((maxlen + 40) * '-')
             for sym in collection:
-                print(line.format(sym[0], sym[1], sym[2], hex(sym[3]), sym[4]))
+                print(line.format(sym.name, sym.count, sym.value, hex(sym.size), sym.sec_version))
         else:
             size_of_text = 0
             for section in self._elffile.iter_sections():
@@ -736,18 +754,18 @@ class ELFRemove:
             # create dict for unique address values
             addr_dict = {}
             for ent in collection:
-                addr_dict[ent[2]] = ent[3]
+                addr_dict[ent.value] = ent.size
 
             if(local != None and len(local) > 0):
-                for func in local:
-                    addr_dict[func[0]] = func[1]
+                for start, size in local:
+                    addr_dict[start] = size
 
             total_b_rem = 0
             for k, v in addr_dict.items():
-                #print(sym[0] + " ", end="", flush=True)
+                #print(sym.name + " ", end="", flush=True)
                 total_b_rem += v
 
-            dynsym_entrys = (self.dynsym[0].header['sh_size'] // self.dynsym[0].header['sh_entsize'])
+            dynsym_entrys = (self.dynsym.section.header['sh_size'] // self.dynsym.section.header['sh_entsize'])
 
             print("Total number of symbols in dynsym: " + str(dynsym_entrys))
             print("    Nr of symbols to remove: " + str(len(collection)))
@@ -769,7 +787,7 @@ class ELFRemove:
         # create dictionary to ensure no double values
         addr_dict = {}
         for ent in collection:
-            addr_dict[ent[2]] = ent[3]
+            addr_dict[ent.value] = ent.size
         if(local != None and len(local) > 0):
             for func in local:
                 addr_dict[func[0]] = func[1]
@@ -782,5 +800,5 @@ class ELFRemove:
     def get_collection_names(self, collection):
         symbols = []
         for sym in collection:
-            symbols.append(sym[0])
+            symbols.append(sym.name)
         return symbols
