@@ -89,8 +89,10 @@ class ELFRemove:
 
         if not self.symtab:
             import os
-            DEBUG_DIR = os.path.join(os.sep, 'usr', 'lib', 'debug', 'lib', 'x86_64-linux-gnu')
-            BUILDID_DIR = os.path.join(os.sep, DEBUG_DIR, '.build-id')
+            _arch_dir = 'x86_64-linux-gnu' if self._elffile.header['e_machine'] == 'EM_X86_64' \
+                else 'i386-linux-gnu'
+            DEBUG_DIR = os.path.join(os.sep, 'usr', 'lib', 'debug', 'lib', _arch_dir)
+            BUILDID_DIR = os.path.join(os.sep, 'usr', 'lib', 'debug', '.build-id')
             paths = [os.path.join(DEBUG_DIR, os.path.basename(filename))]
             id_section = self._elffile.get_section_by_name('.note.gnu.build-id')
             if not id_section:
