@@ -279,6 +279,7 @@ class ELFRemove:
             value -= size
             self._f.seek(off_to_head + 32)
             self._f.write(value.to_bytes(8, self._byteorder))
+            section.section.header['sh_size'] = value
         elif(self._elffile.header['e_machine'] == 'EM_386'):
             # 32 Bit
             self._f.seek(off_to_head + 20)
@@ -289,6 +290,7 @@ class ELFRemove:
             value -= size
             self._f.seek(off_to_head + 20)
             self._f.write(value.to_bytes(4, self._byteorder))
+            section.section.header['sh_size'] = value
 
 
     def _shrink_dynamic_tag(self, target_tag, amount):
@@ -309,6 +311,53 @@ class ELFRemove:
         self._f.seek(f_off)
         self._f.write(new_val)
 
+
+    def _batch_remove_relocs(self, symbol_list, section, push=False):
+        if section is None:
+            return
+
+        if(self._elffile.header['e_machine'] == 'EM_X86_64'):
+            ent_size = 24 # Elf64_rela struct size, x64 always rela?
+        else:
+            ent_size = 8 # Elf32_rel struct size, x86 always rel
+
+        if self._reloc_list is None:
+            self._reloc_list = list(section.section.iter_relocations())
+
+        removed = 0
+        for symbol in symbol_list:
+            removed += self._edit_rel_sect(self._reloc_list, symbol.count, symbol.value, ent_size, push)
+
+        # Write whole section out at once
+        offset = section.section.header['sh_offset']
+
+        # Zero the section first
+        self._f.seek(offset)
+        self._f.write(b'\00' * section.section.header['sh_size'])
+
+        # Write all entries out
+        self._f.seek(offset)
+
+        endianness = '<' if self._byteorder == 'little' else '>'
+        for reloc in self._reloc_list:
+            if ent_size == 24:
+                cur_val = struct.pack(endianness + 'QqQ', reloc.entry['r_offset'],
+                                        reloc.entry['r_info'], reloc.entry['r_addend'])
+            else:
+                cur_val = struct.pack(endianness + 'Ii', reloc.entry['r_offset'],
+                                        reloc.entry['r_info'])
+            self._f.write(cur_val)
+
+        # Change the size in the section header
+        self._change_section_size(section, ent_size * removed)
+        # the following is needed in order to lower the number of relocations
+        # returned via iter_relocations() -> uses num_relocations() -> uses
+        # _size to calculate the number
+        section.section._size -= (ent_size * removed)
+
+        # Shrink the number of relocation entries in the DYNAMIC segment
+        self._shrink_dynamic_tag('DT_RELASZ', ent_size * removed)
+
     '''
     Function:   _edit_rel_sect
     Parameter:  section = Tuple with section object and index (object, index)
@@ -316,67 +365,33 @@ class ELFRemove:
 
     Description: adapts the entries of the given relocation section to the changed dynsym
     '''
-    def _edit_rel_sect(self, section, sym_nr, sym_addr, push=False):
-        if(section != None):
-            ent_size = 0
-            ent_cnt = 0
-
-            offset = section.section.header['sh_offset']
-
-            if(self._elffile.header['e_machine'] == 'EM_X86_64'):
-                ent_size = 24 # Elf64_rela struct size, x64 always rela?
-            else:
-                ent_size = 8 # Elf32_rel struct size, x86 always rel
-
-            if self._reloc_list is None:
-                self._reloc_list = list(section.section.iter_relocations())
-            reloc_list = self._reloc_list
-            cur_idx = 0
-            removed = 0
-            #print('list based removal for {}'.format(hex(sym_addr)))
-            while cur_idx < len(reloc_list):
-                reloc = reloc_list[cur_idx]
-                if reloc.entry['r_info_sym'] == sym_nr or reloc.entry['r_addend'] == sym_addr:
-                    if push:
-                        reloc_list.pop(cur_idx)
-                        removed += 1
-                        continue
-                    else:
-                        reloc.entry['r_info_sym'] = 0
-                        if ent_size == 24:
-                            reloc.entry['r_addend'] = 0
-                elif reloc.entry['r_info_sym'] > sym_nr:
-                    new_sym = reloc.entry['r_info_sym'] - 1
-                    old_type = reloc.entry['r_info_type']
-                    if ent_size == 8:
-                        reloc.entry['r_info'] = new_sym << 8 | (old_type & 0xFF)
-                    else:
-                        reloc.entry['r_info'] = new_sym << 32 | (old_type & 0xFFFFFFFF)
-                    reloc.entry['r_info_sym'] = new_sym
-
-                cur_idx += 1
-
-            # Write whole section out at once
-            self._f.seek(offset)
-            endianness = '<' if self._byteorder == 'little' else '>'
-            for reloc in reloc_list:
-                if ent_size == 24:
-                    cur_val = struct.pack(endianness + 'QqQ', reloc.entry['r_offset'],
-                                          reloc.entry['r_info'], reloc.entry['r_addend'])
+    def _edit_rel_sect(self, reloc_list, sym_nr, sym_addr, ent_size, push=False):
+        removed = 0
+        cur_idx = 0
+        #print('list based removal for {}'.format(hex(sym_addr)))
+        while cur_idx < len(reloc_list):
+            reloc = reloc_list[cur_idx]
+            if reloc.entry['r_info_sym'] == sym_nr or reloc.entry['r_addend'] == sym_addr:
+                if push:
+                    reloc_list.pop(cur_idx)
+                    removed += 1
+                    continue
                 else:
-                    cur_val = struct.pack(endianness + 'Ii', reloc.entry['r_offset'],
-                                          reloc.entry['r_info'])
-                self._f.write(cur_val)
+                    reloc.entry['r_info_sym'] = 0
+                    if ent_size == 24:
+                        reloc.entry['r_addend'] = 0
+            elif reloc.entry['r_info_sym'] > sym_nr:
+                new_sym = reloc.entry['r_info_sym'] - 1
+                old_type = reloc.entry['r_info_type']
+                if ent_size == 8:
+                    reloc.entry['r_info'] = new_sym << 8 | (old_type & 0xFF)
+                else:
+                    reloc.entry['r_info'] = new_sym << 32 | (old_type & 0xFFFFFFFF)
+                reloc.entry['r_info_sym'] = new_sym
 
-            # Change the size in the section header
-            self._change_section_size(section, ent_size * removed)
-            # the following is needed in order to lower the number of relocations
-            # returned via iter_relocations() -> uses num_relocations() -> uses
-            # _size to calculate the number
-            section.section._size -= (ent_size * removed)
+            cur_idx += 1
 
-            # Shrink the number of relocation entries in the DYNAMIC segment
-            self._shrink_dynamic_tag('DT_RELASZ', ent_size * removed)
+        return removed
 
 
     '''
@@ -415,8 +430,8 @@ class ELFRemove:
         if(self._elf_hash != None):
             sect = HashSection(self._elffile.stream, self._elf_hash.section.header['sh_offset'], self._elffile)
             # print hash section
-            for i in range (0, sect.params['nchains']):
-                print(self.dynsym.section.get_symbol(i).name)
+            #for i in range (0, sect.params['nchains']):
+            #    print(self.dynsym.section.get_symbol(i).name)
 
             # find every symbol in hash table
             for i in range(1, self.dynsym.section.num_symbols()):
@@ -435,71 +450,84 @@ class ELFRemove:
                 if(found == 0):
                     raise Exception("Symbol not found in bucket!!! Hash Section broken!")
 
+    def _batch_remove_elf_hash(self, symbol_list):
+        if self._elf_hash is None:
+            return
+
+        sect = HashSection(self._elffile.stream, self._elf_hash.section.header['sh_offset'], self._elffile)
+        params = {'nbuckets': sect.params['nbuckets'],
+                  'nchains': sect.params['nchains'],
+                  'buckets': sect.params['buckets'],
+                  'chains': sect.params['chains']}
+
+        for symbol in symbol_list:
+            self._edit_elf_hashtable(symbol.name, symbol.count, params)
+
+        # Zero out old hash table
+        self._f.seek(self._elf_hash.section.header['sh_offset'])
+        self._f.write(b'\00' * self._elf_hash.section.header['sh_size'])
+
+        # write to file
+        #  - nbucket
+        self._f.seek(self._elf_hash.section.header['sh_offset'])
+        self._f.write(params['nbuckets'].to_bytes(4, self._byteorder))
+        #  - nchain
+        self._f.seek(self._elf_hash.section.header['sh_offset'] + 4)
+        self._f.write(params['nchains'].to_bytes(4, self._byteorder))
+
+        # - buckets
+        out = b''.join(params['buckets'][i].to_bytes(4, self._byteorder) for i in range(0, params['nbuckets']))
+        self._f.write(out)
+
+        # - chains
+        out = b''.join(params['chains'][i].to_bytes(4, self._byteorder) for i in range(0, params['nchains']))
+        self._f.write(out)
+
+        self._change_section_size(self._elf_hash, len(symbol_list) * 4)
 
     '''
     Function:   _edit_elf_hashtable
     Parameter:  symbol_name   = name of the Symbol to be removed
                 dynsym_nr     = nr of the given symbol in the dynsym table
-                total_ent_sym = total entries of th dynsym section
 
     Description: removes the given Symbol from the '.hash' section
     '''
-    def _edit_elf_hashtable(self, symbol_name, dynsym_nr, total_ent_sym):
-        if(self._elf_hash != None):
-            sect = HashSection(self._elffile.stream, self._elf_hash.section.header['sh_offset'], self._elffile)
-            func_hash = self._elfhash(symbol_name)
-            bucket_nr = func_hash % sect.params['nbuckets']
-            self._log("\t" + symbol_name + ': adjust hash_section, hash = ' + hex(func_hash) + ' bucket = ' + str(bucket_nr))
+    def _edit_elf_hashtable(self, symbol_name, dynsym_nr, params):
+        func_hash = self._elfhash(symbol_name)
+        bucket_nr = func_hash % params['nbuckets']
+        self._log("\t" + symbol_name + ': adjust hash_section, hash = ' + hex(func_hash) + ' bucket = ' + str(bucket_nr))
 
-            # find symbol and remove entry from chain
-            cur_ptr = sect.params['buckets'][bucket_nr]
+        # find symbol and remove entry from chain
+        cur_ptr = params['buckets'][bucket_nr]
 
-            # case: first elem -> change start value of Bucket
-            if(cur_ptr == dynsym_nr):
-                sect.params['buckets'][bucket_nr] = sect.params['chains'][cur_ptr]
-            else:
-                while(cur_ptr != 0):
-                    prev_ptr = cur_ptr
-                    cur_ptr = sect.params['chains'][cur_ptr]
-                    # case: middle and last element -> set pointer to next element in previous element
-                    if(cur_ptr == dynsym_nr):
-                        sect.params['chains'][prev_ptr] = sect.params['chains'][cur_ptr]
-                        break
-                    if(cur_ptr == 0):
-                        raise Exception("Entry \'" + symbol_name + "\' not found in Hash Table! Hash Table is broken!")
+        # case: first elem -> change start value of Bucket
+        if(cur_ptr == dynsym_nr):
+            params['buckets'][bucket_nr] = params['chains'][cur_ptr]
+        else:
+            while(cur_ptr != 0):
+                prev_ptr = cur_ptr
+                cur_ptr = params['chains'][cur_ptr]
+                # case: middle and last element -> set pointer to next element in previous element
+                if(cur_ptr == dynsym_nr):
+                    params['chains'][prev_ptr] = params['chains'][cur_ptr]
+                    break
+                if(cur_ptr == 0):
+                    raise Exception("Entry \'" + symbol_name + "\' not found in Hash Table! Hash Table is broken!")
 
-            # delete entry and change pointer in list
-            for i in range(dynsym_nr, (sect.params['nchains'] - 1)):
-                sect.params['chains'][i] = sect.params['chains'][i + 1]
-            sect.params['chains'][sect.params['nchains'] - 1] = 0
-            sect.params['nchains'] -= 1
+        # delete entry and change pointer in list
+        for i in range(dynsym_nr, (params['nchains'] - 1)):
+            params['chains'][i] = params['chains'][i + 1]
 
-            for i in range(0, sect.params['nchains']):
-                if(sect.params['chains'][i] >= dynsym_nr):
-                    sect.params['chains'][i] -= 1
+        params['chains'][params['nchains'] - 1] = 0
+        params['nchains'] -= 1
 
-            for i in range(0, sect.params['nbuckets']):
-                if(sect.params['buckets'][i] >= dynsym_nr):
-                    sect.params['buckets'][i] -= 1
+        for i in range(0, params['nchains']):
+            if(params['chains'][i] >= dynsym_nr):
+                params['chains'][i] -= 1
 
-            # TODO -> do this just once when all changes have been made
-            # write to file
-            #  - nchain
-            self._f.seek(self._elf_hash.section.header['sh_offset'] +  4)
-            self._f.write(sect.params['nchains'].to_bytes(4, self._byteorder))
-
-            # - buckets
-            buckets_start = self._elf_hash.section.header['sh_offset'] + 8
-            for i in range(0, sect.params['nbuckets']):
-                self._f.seek(buckets_start + i * 4)
-                self._f.write(sect.params['buckets'][i].to_bytes(4, self._byteorder))
-
-            # - chains
-            chains_start = self._elf_hash.section.header['sh_offset'] + 8 + sect.params['nbuckets'] * 4
-            for i in range(0, sect.params['nchains']):
-                self._f.seek(chains_start + i * 4)
-                self._f.write(sect.params['chains'][i].to_bytes(4, self._byteorder))
-
+        for i in range(0, params['nbuckets']):
+            if(params['buckets'][i] >= dynsym_nr):
+                params['buckets'][i] -= 1
 
 
     '''
@@ -619,13 +647,10 @@ class ELFRemove:
                 raise Exception('symbol_collection was generated for older revision of ' + section.section.name)
             #### Overwrite Symbol Table entry ####
             # edit gnu_hash table, gnu_versions and relocation table but only for dynsym section
+            # Hash Table and Relocation sections are edited after symbols were removed
             if(section.section.name == '.dynsym'):
                 self._edit_gnu_hashtable(symbol_t.name, symbol_t.count, max_entrys)
-                self._edit_elf_hashtable(symbol_t.name, symbol_t.count, max_entrys)
                 self._edit_gnu_versions(symbol_t.count, max_entrys)
-                self._edit_rel_sect(self._rel_plt, symbol_t.count, symbol_t.value)
-                self._reloc_list = None
-                self._edit_rel_sect(self._rel_dyn, symbol_t.count, symbol_t.value, push=True)
 
             self._log('\t' + symbol_t.name + ': deleting table entry')
 
@@ -640,23 +665,27 @@ class ELFRemove:
 
                 # last entry -> set to 0x0
                 self._f.seek(section.section.header['sh_offset'] + ((max_entrys - 1) * section.section.header['sh_entsize']))
-                for count in range(0, section.section.header['sh_entsize']):
-                    self._f.write(chr(0x0).encode('ascii'))
+                self._f.write(section.section.header['sh_entsize'] * chr(0x0).encode('ascii'))
 
             #### Overwrite function with zeros ####
             if(overwrite):
                 if symbol_t.value != 0 and symbol_t.size != 0:
                     self._log('\t' + symbol_t.name + ': overwriting text segment with zeros')
                     self._f.seek(symbol_t.value)
-                    for count in range(0, symbol_t.size):
-                        #self._f.write(chr(0x0).encode('ascii'))
-                        self._f.write(b'\xcc')
+                    self._f.write(b'\xcc' * symbol_t.size)
             removed += 1;
             max_entrys -= 1
 
-
         self._change_section_size(section, removed * section.section.header['sh_entsize'])
         section = SectionWrapper(section.section, section.index, section.version + 1)
+
+        if section.section.name == '.dynsym':
+            self.dynsym = section
+            self._batch_remove_relocs(sorted_list, self._rel_plt)
+            self._reloc_list = None
+            self._batch_remove_relocs(sorted_list, self._rel_dyn, push=True)
+            self._batch_remove_elf_hash(sorted_list)
+
         return removed
 
     '''

@@ -84,7 +84,7 @@ def proc():
                     continue
                 if(key not in blacklist):
                     value = store[lib.fullname].local_users.get(key, [])
-                    if(not value and store[lib.fullname].ranges[key] > 0):
+                    if (not value and store[lib.fullname].ranges[key] > 0):
                         local.append((key, store[lib.fullname].ranges[key]))
 
         # collect the set of Symbols for given function names
