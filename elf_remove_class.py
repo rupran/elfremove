@@ -120,8 +120,9 @@ class ELFRemove:
 #                    logging.debug('Failed to open external symbol table for %s at %s: %s',
 #                                  filename, path, err)
                     continue
+
         if self.symtab:
-            print('SYMTAB!')
+            self._log('Found a .symtab section for {}'.format(filename))
 
 
         # fallback if section headers have been stripped from the binary
@@ -223,38 +224,6 @@ class ELFRemove:
             , 'sh_size': size, 'sh_link': 0, 'sh_info': 0, 'sh_addralign': 0, 'sh_entsize': entsize}
 
         return header
-
-    def _dyn_get_section_info(self, dyn_seg, sec_name):
-        ptr, offset = dyn_seg.get_table_offset(sec_name)
-        if ptr is None or offset is None:
-            raise Exception('Dynamic segment does not contain \'' + sec_name + '\'')
-
-        nearest_ptr = None
-        # entries with value interpreted as pointer (https://docs.oracle.com/cd/E23824_01/html/819-0690/chapter6-42444.html)
-        dptr_entries = [3, 4, 5, 6, 7, 12, 13, 17, 21, 23, 25, 26, 32
-            ,0x6ffffefa, 0x6ffffefb, 0x6ffffefc, 0x6ffffefd, 0x6ffffefe, 0x6ffffeff
-            ,0x6ffffffe, 0x6ffffffc]
-        for tag in dyn_seg.iter_tags():
-            tag_ptr = tag['d_ptr']
-
-            # fix for symtab
-            if (ENUM_D_TAG_COMMON[tag['d_tag']] not in dptr_entries):
-                continue
-
-            if (tag_ptr > ptr and (nearest_ptr is None or nearest_ptr > tag_ptr)):
-                nearest_ptr = tag_ptr
-
-        if nearest_ptr is None:
-            # Use the end of segment that contains DT_SYMTAB.
-            for segment in dyn_seg.elffile.iter_segments():
-                if (segment['p_vaddr'] <= tab_ptr and
-                        tab_ptr <= (segment['p_vaddr'] + segment['p_filesz'])):
-                    nearest_ptr = segment['p_vaddr'] + segment['p_filesz']
-
-        if nearest_ptr is None:
-            raise Exception('Could not determine the size of \'' + name + '\' section.')
-        return (nearest_ptr - ptr, offset)
-
 
     '''
     Function:   _change_section_size
@@ -369,19 +338,22 @@ class ELFRemove:
         removed = 0
         cur_idx = 0
         #print('list based removal for {}'.format(hex(sym_addr)))
-        while cur_idx < len(reloc_list):
+        list_len = len(reloc_list)
+        while cur_idx < list_len:
             reloc = reloc_list[cur_idx]
-            if reloc.entry['r_info_sym'] == sym_nr or reloc.entry['r_addend'] == sym_addr:
+            r_info_sym = reloc.entry['r_info_sym']
+            if r_info_sym == sym_nr or reloc.entry['r_addend'] == sym_addr:
                 if push:
                     reloc_list.pop(cur_idx)
                     removed += 1
+                    list_len -= 1
                     continue
                 else:
                     reloc.entry['r_info_sym'] = 0
                     if ent_size == 24:
                         reloc.entry['r_addend'] = 0
-            elif reloc.entry['r_info_sym'] > sym_nr:
-                new_sym = reloc.entry['r_info_sym'] - 1
+            elif r_info_sym > sym_nr:
+                new_sym = r_info_sym - 1
                 old_type = reloc.entry['r_info_type']
                 if ent_size == 8:
                     reloc.entry['r_info'] = new_sym << 8 | (old_type & 0xFF)
@@ -393,34 +365,40 @@ class ELFRemove:
 
         return removed
 
-
     '''
-    Function:   _edit_gnu_versions
-    Parameter:  dynsym_nr       = nr of the given symbol in the dynsym table
-                total_sym_count = total entries of th dynsym section
+    Function:   _batch_remove_gnu_versions
+    Parameter:  symbol_list      = the list of symbols that are removed from the
+                                   dynsym table
+                orig_dynsym_size = the original number of symbols in the dynsym
+                                   section
 
-    Description: removes the given offset from the 'gnu.version' section
+    Description: rewrites the '.gnu.version' section by removing all symbols
+                 from symbol_list
     '''
-    def _edit_gnu_versions(self, dynsym_nr, total_sym_cnt):
-        # should be the same for 32-Bit
-        if(self._gnu_version != None):
-            ent_size = 2 # 2 Bytes for each entry (Elf32_half & Elf64_half)
-            offset = self._gnu_version.section.header['sh_offset']
+    def _batch_remove_gnu_versions(self, symbol_list, orig_dynsym_size):
+        if self._gnu_version is None:
+            return
 
-            # copy all following entries up by one
-            for cur_ent in range(dynsym_nr, total_sym_cnt):
-                self._f.seek(offset + (cur_ent + 1) * ent_size)
-                cur_ent_b = self._f.read(ent_size)
-                self._f.seek(offset + cur_ent * ent_size)
-                self._f.write(cur_ent_b)
+        ent_size = 2
+        # Read the version section as a whole and interpret as a list of
+        # ElfXX_Half integers
+        self._f.seek(self._gnu_version.section.header['sh_offset'])
+        section_bytes = self._f.read(orig_dynsym_size * ent_size)
+        fmt_str = ('<' if self._byteorder == 'little' else '>') + str(orig_dynsym_size) + 'H'
+        versions = list(struct.unpack(fmt_str, section_bytes))
 
-            # remove double last value
-            self._f.seek(offset + (total_sym_cnt - 1) * ent_size)
-            for count in range(0, ent_size):
-                self._f.write(chr(0x0).encode('ascii'))
+        for symbol in symbol_list:
+            versions.pop(symbol.count)
 
-            # change section size in header
-            self._change_section_size(self._gnu_version, ent_size)
+        # Build and write the new versions section
+        fmt_str = ('<' if self._byteorder == 'little' else '>') + str(len(versions)) + 'H'
+        new_section_bytes = struct.pack(fmt_str, *versions)
+        self._f.seek(self._gnu_version.section.header['sh_offset'])
+        self._f.write(new_section_bytes)
+        # Zero out rest of the section
+        self._f.write(b'\00' * ((orig_dynsym_size - len(versions)) * ent_size))
+
+        self._change_section_size(self._gnu_version, ent_size * len(symbol_list))
 
     '''
     Helper function to test the consitency of the standard hash section
@@ -530,6 +508,15 @@ class ELFRemove:
                 params['buckets'][i] -= 1
 
 
+    def _batch_remove_gnu_hashtable(self, symbol_list, dynsym_size):
+        if self._gnu_hash is None:
+            return
+
+        for symbol in symbol_list:
+            self._edit_gnu_hashtable(symbol.name, symbol.count, dynsym_size)
+
+        self._change_section_size(self._gnu_hash, len(symbol_list) * 4)
+
     '''
     Function:   _edit_gnu_hashtable
     Parameter:  symbol_name   = name of the Symbol to be removed
@@ -539,82 +526,77 @@ class ELFRemove:
     Description: removes the given Symbol from the '.gnu.hash' section
     '''
     def _edit_gnu_hashtable(self, symbol_name, dynsym_nr, total_ent_sym):
-        if(self._gnu_hash != None):
-            bloom_entry = 8
-            if(self._elffile.header['e_machine'] == 'EM_386'):
-                bloom_entry = 4
+        bloom_entry = 8
+        if(self._elffile.header['e_machine'] == 'EM_386'):
+            bloom_entry = 4
 
-            self._f.seek(self._gnu_hash.section.header['sh_offset'])
-            nbuckets_b = self._f.read(4)
-            symoffset_b = self._f.read(4)
-            bloomsize_b = self._f.read(4)
-            #bloomshift_b = f.read(4)
+        self._f.seek(self._gnu_hash.section.header['sh_offset'])
+        nbuckets_b = self._f.read(4)
+        symoffset_b = self._f.read(4)
+        bloomsize_b = self._f.read(4)
+        #bloomshift_b = f.read(4)
 
-            nbuckets = int.from_bytes(nbuckets_b, self._byteorder, signed=False)
-            symoffset = int.from_bytes(symoffset_b, self._byteorder, signed=False)
-            bloomsize = int.from_bytes(bloomsize_b, self._byteorder, signed=False)
-            #bloomshift = int.from_bytes(bloomshift_b, self._byteorder, signed=False)
+        nbuckets = int.from_bytes(nbuckets_b, self._byteorder, signed=False)
+        symoffset = int.from_bytes(symoffset_b, self._byteorder, signed=False)
+        bloomsize = int.from_bytes(bloomsize_b, self._byteorder, signed=False)
+        #bloomshift = int.from_bytes(bloomshift_b, self._byteorder, signed=False)
 
-            #bloom_hex = self._f.read(bloomsize * 8)
+        #bloom_hex = self._f.read(bloomsize * 8)
 
-            ### calculate hash and bucket ###
-            func_hash = self._gnuhash(symbol_name)
-            bucket_nr = func_hash % nbuckets
-            self._log("\t" + symbol_name + ': adjust gnu_hash_section, hash = ' + hex(func_hash) + ' bucket = ' + str(bucket_nr))
+        ### calculate hash and bucket ###
+        func_hash = self._gnuhash(symbol_name)
+        bucket_nr = func_hash % nbuckets
+        self._log("\t" + symbol_name + ': adjust gnu_hash_section, hash = ' + hex(func_hash) + ' bucket = ' + str(bucket_nr))
 
-            bucket_offset = self._gnu_hash.section.header['sh_offset'] + 4 * 4 + bloomsize * bloom_entry
+        bucket_offset = self._gnu_hash.section.header['sh_offset'] + 4 * 4 + bloomsize * bloom_entry
 
-            ### Set new Bucket start values ###
-            for cur_bucket in range(bucket_nr, nbuckets - 1):
-                self._f.seek(bucket_offset + (cur_bucket + 1) * 4)
-                bucket_start_b = self._f.read(4)
-                bucket_start = int.from_bytes(bucket_start_b, self._byteorder, signed=False)
-                # TODO: why is this possible (libcurl.so.4.5.0 - remove all)
-                if(bucket_start == 0):
-                    continue
-                bucket_start -= 1
-                self._f.seek(bucket_offset + (cur_bucket + 1) * 4)
-                self._f.write(bucket_start.to_bytes(4, self._byteorder))
+        ### Set new Bucket start values ###
+        fmt_str = ('<' if self._byteorder == 'little' else '>') + str(nbuckets - bucket_nr - 1) + 'I'
+        self._f.seek(bucket_offset + (bucket_nr + 1) * 4)
+        read_bytes = self._f.read((nbuckets - bucket_nr - 1) * 4)
+        buckets = list(struct.unpack(fmt_str, read_bytes))
+        for idx, item in enumerate(buckets):
+            if buckets[idx] == 0:
+                continue
+            else:
+                buckets[idx] -= 1
+        new_bytes = struct.pack(fmt_str, *buckets)
+        self._f.seek(bucket_offset + (bucket_nr + 1) * 4)
+        self._f.write(new_bytes)
 
-            ### remove deletet entry from bucket ###
-            # check hash
-            sym_nr = dynsym_nr - symoffset
-            if(sym_nr < 0):
-                raise Exception('Function index out of bounds for gnu_hash_section! Index: ' + str(sym_nr))
-            self._f.seek(bucket_offset + nbuckets * 4 + sym_nr * 4)
-            bucket_hash_b = self._f.read(4)
+        ### remove deletet entry from bucket ###
+        # check hash
+        sym_nr = dynsym_nr - symoffset
+        if(sym_nr < 0):
+            raise Exception('Function index out of bounds for gnu_hash_section! Index: ' + str(sym_nr))
+        self._f.seek(bucket_offset + nbuckets * 4 + sym_nr * 4)
+        bucket_hash_b = self._f.read(4)
 
-            bucket_hash = int.from_bytes(bucket_hash_b, self._byteorder, signed=False)
+        bucket_hash = int.from_bytes(bucket_hash_b, self._byteorder, signed=False)
 
-            # if this happens, sth on the library or hash function is broken!
-            if((bucket_hash & ~0x1) != (func_hash & ~0x1)):
-                raise Exception('calculated hash: ' + str(hex(func_hash)) + ' read hash: ' + str(hex(bucket_hash)))
+        # if this happens, sth on the library or hash function is broken!
+        if((bucket_hash & ~0x1) != (func_hash & ~0x1)):
+            raise Exception('calculated hash: ' + str(hex(func_hash)) + ' read hash: ' + str(hex(bucket_hash)))
 
-            # copy all entrys afterwards up by one
-            total_ent = total_ent_sym - symoffset
-            for cur_hash_off in range(sym_nr, total_ent):
-                self._f.seek(bucket_offset + nbuckets * 4 + (cur_hash_off + 1) * 4)
-                cur_hash_b = self._f.read(4)
-                self._f.seek(bucket_offset + nbuckets * 4 + cur_hash_off * 4)
-                self._f.write(cur_hash_b)
+        # copy all entrys afterwards up by one
+        total_ent = total_ent_sym - symoffset
+        self._f.seek(bucket_offset + nbuckets * 4 + (sym_nr + 1)  * 4)
+        later_hashes_b = self._f.read((total_ent - sym_nr - 1) * 4)
+        self._f.seek(bucket_offset + nbuckets * 4 + sym_nr * 4)
+        self._f.write(later_hashes_b)
 
-            # remove double last value
-            self._f.seek(bucket_offset + nbuckets * 4 + total_ent * 4)
-            for count in range(0, 4):
-                self._f.write(chr(0x0).encode('ascii'))
+        # remove double last value
+        self._f.write(chr(0x0).encode('ascii') * 4)
 
-            # if last bit is set, set it at the value before
-            if((bucket_hash & 0x1) == 1 and sym_nr != 0):
-                self._f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
-                new_tail_b = self._f.read(4)
-                new_tail = int.from_bytes(new_tail_b, self._byteorder, signed=False)
-                # set with 'or' if already set
-                new_tail = new_tail ^ 0x00000001
-                self._f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
-                self._f.write(new_tail.to_bytes(4, self._byteorder))
-
-            # change section size in header
-            self._change_section_size(self._gnu_hash, 4)
+        # if last bit is set, set it at the value before
+        if((bucket_hash & 0x1) == 1 and sym_nr != 0):
+            self._f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
+            new_tail_b = self._f.read(4)
+            new_tail = int.from_bytes(new_tail_b, self._byteorder, signed=False)
+            # set with 'or' if already set
+            new_tail = new_tail ^ 0x00000001
+            self._f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
+            self._f.write(new_tail.to_bytes(4, self._byteorder))
 
     '''
     Function:   remove_from_section
@@ -632,13 +614,16 @@ class ELFRemove:
 
         if(len(collection) == 0):
             return
-#    def __init__(self, name, count, value, size, sec_version):
+
         # sort list by offset in symbol table
         # otherwise the index would be wrong after one Element was removed
         sorted_list = sorted(collection, reverse=True, key=lambda x: x.count)
 
         removed = 0
-        max_entrys = (section.section.header['sh_size'] // section.section.header['sh_entsize'])
+        sh_offset = section.section.header['sh_offset']
+        sh_entsize = section.section.header['sh_entsize']
+        max_entrys = (section.section.header['sh_size'] // sh_entsize)
+        original_num_entries = max_entrys
 
         self._log('In \'' + section.section.name + '\' section:')
         for symbol_t in sorted_list:
@@ -646,26 +631,18 @@ class ELFRemove:
             if(symbol_t.sec_version != section.version):
                 raise Exception('symbol_collection was generated for older revision of ' + section.section.name)
             #### Overwrite Symbol Table entry ####
-            # edit gnu_hash table, gnu_versions and relocation table but only for dynsym section
-            # Hash Table and Relocation sections are edited after symbols were removed
-            if(section.section.name == '.dynsym'):
-                self._edit_gnu_hashtable(symbol_t.name, symbol_t.count, max_entrys)
-                self._edit_gnu_versions(symbol_t.count, max_entrys)
-
             self._log('\t' + symbol_t.name + ': deleting table entry')
 
             # Only write to file if the section is actually part of the file
             if section.index != -1:
                 # push up all entrys
-                for cur_entry in range(symbol_t.count + 1, max_entrys):
-                    self._f.seek(section.section.header['sh_offset'] + (cur_entry * section.section.header['sh_entsize']))
-                    read_bytes = self._f.read(section.section.header['sh_entsize'])
-                    self._f.seek(section.section.header['sh_offset'] + ((cur_entry - 1) * section.section.header['sh_entsize']))
-                    self._f.write(read_bytes)
+                self._f.seek(sh_offset + ((symbol_t.count + 1) * sh_entsize))
+                read_bytes = self._f.read((max_entrys - symbol_t.count - 1) * sh_entsize)
+                self._f.seek(sh_offset + (symbol_t.count * sh_entsize))
+                self._f.write(read_bytes)
 
                 # last entry -> set to 0x0
-                self._f.seek(section.section.header['sh_offset'] + ((max_entrys - 1) * section.section.header['sh_entsize']))
-                self._f.write(section.section.header['sh_entsize'] * chr(0x0).encode('ascii'))
+                self._f.write(sh_entsize * chr(0x0).encode('ascii'))
 
             #### Overwrite function with zeros ####
             if(overwrite):
@@ -676,7 +653,7 @@ class ELFRemove:
             removed += 1;
             max_entrys -= 1
 
-        self._change_section_size(section, removed * section.section.header['sh_entsize'])
+        self._change_section_size(section, removed * sh_entsize)
         section = SectionWrapper(section.section, section.index, section.version + 1)
 
         if section.section.name == '.dynsym':
@@ -685,6 +662,8 @@ class ELFRemove:
             self._reloc_list = None
             self._batch_remove_relocs(sorted_list, self._rel_dyn, push=True)
             self._batch_remove_elf_hash(sorted_list)
+            self._batch_remove_gnu_versions(sorted_list, original_num_entries)
+            self._batch_remove_gnu_hashtable(sorted_list, original_num_entries)
 
         return removed
 
@@ -776,8 +755,7 @@ class ELFRemove:
             #self._edit_rel_sect(self._rel_dyn, 0xffffffff, func.name, push=True)
             self._f.seek(start)
 
-            for count in range(0, size):
-                self._f.write(b'\xCC')
+            self._f.write(b'\xCC' * size)
 
         if(self.symtab != None):
             addr = [start for start, size in func_tuple_list]
