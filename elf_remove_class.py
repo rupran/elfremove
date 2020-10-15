@@ -281,7 +281,7 @@ class ELFRemove:
         self._f.write(new_val)
 
 
-    def _batch_remove_relocs(self, symbol_list, section, push=False):
+    def _batch_remove_relocs(self, symbol_list, section, push=False, is_symtab=False):
         if section is None:
             return
 
@@ -305,7 +305,8 @@ class ELFRemove:
             # table at all.
             if symbol.count not in sym_nrs and symbol.value not in sym_addrs:
                 continue
-            removed += self._edit_rel_sect(self._reloc_list, symbol.count, symbol.value, ent_size, push)
+            removed += self._edit_rel_sect(self._reloc_list, symbol.count,
+                                           symbol.value, ent_size, push, is_symtab)
             sym_nrs.discard(symbol.count)
             sym_addrs.discard(symbol.value)
 
@@ -316,22 +317,25 @@ class ELFRemove:
         # index of the removed symbol, and those are now always at the back of
         # the relocation list). By starting with the highest symbol table index
         # first (as given in symbol_list), we further reduce the number of
-        # iterations over the relocation list.
-        for symbol in symbol_list:
-            cur_idx = len(self._reloc_list) - 1
-            while cur_idx >= 0:
-                reloc = self._reloc_list[cur_idx]
-                r_info_sym = reloc.entry['r_info_sym']
-                if r_info_sym < symbol.count:
-                    break
-                new_sym = r_info_sym - 1
-                old_type = reloc.entry['r_info_type']
-                if ent_size == 8:
-                    reloc.entry['r_info'] = new_sym << 8 | (old_type & 0xFF)
-                else:
-                    reloc.entry['r_info'] = new_sym << 32 | (old_type & 0xFFFFFFFF)
-                reloc.entry['r_info_sym'] = new_sym
-                cur_idx -= 1
+        # iterations over the relocation list. Note that this must only be done
+        # for the .dynsym section and not if we delete relocations referring to
+        # local functions from .symtab.
+        if not is_symtab:
+            for symbol in symbol_list:
+                cur_idx = len(self._reloc_list) - 1
+                while cur_idx >= 0:
+                    reloc = self._reloc_list[cur_idx]
+                    r_info_sym = reloc.entry['r_info_sym']
+                    if r_info_sym < symbol.count:
+                        break
+                    new_sym = r_info_sym - 1
+                    old_type = reloc.entry['r_info_type']
+                    if ent_size == 8:
+                        reloc.entry['r_info'] = new_sym << 8 | (old_type & 0xFF)
+                    else:
+                        reloc.entry['r_info'] = new_sym << 32 | (old_type & 0xFFFFFFFF)
+                    reloc.entry['r_info_sym'] = new_sym
+                    cur_idx -= 1
 
         # restore old order of relocation list
 
@@ -372,14 +376,14 @@ class ELFRemove:
 
     Description: adapts the entries of the given relocation section to the changed dynsym
     '''
-    def _edit_rel_sect(self, reloc_list, sym_nr, sym_addr, ent_size, push=False):
+    def _edit_rel_sect(self, reloc_list, sym_nr, sym_addr, ent_size, push=False, is_symtab=False):
         removed = 0
         cur_idx = 0
         list_len = len(reloc_list)
         while cur_idx < list_len:
             reloc = reloc_list[cur_idx]
             r_info_sym = reloc.entry['r_info_sym']
-            if r_info_sym == sym_nr or reloc.entry['r_addend'] == sym_addr:
+            if (not is_symtab and r_info_sym == sym_nr) or reloc.entry['r_addend'] == sym_addr:
                 if push:
                     reloc_list.pop(cur_idx)
                     removed += 1
@@ -389,7 +393,13 @@ class ELFRemove:
                     reloc.entry['r_info_sym'] = 0
                     if ent_size == 24:
                         reloc.entry['r_addend'] = 0
-            # This only works because the relocation entries are sorted and
+            # If we're processing a .symtab, we can only look at R_XX_RELATIVE
+            # relocations and thus have to stop when the relocation entry
+            # references a symbol that's part of .dynsym.
+            elif is_symtab:
+                if r_info_sym > 0:
+                    break
+            # This break works because the relocation entries are sorted and
             # R_XX_RELATIVE relocations (which might have their r_addend field
             # set to the address of our symbol) are required to have 0 as their
             # symbol table index (and thus always come first).
@@ -693,8 +703,11 @@ class ELFRemove:
 
         if section.section.name == '.dynsym':
             self.dynsym = section
+
+        self._batch_remove_relocs(sorted_list, self._rel_dyn, push=True,
+                                  is_symtab=(section.section.name=='.symtab'))
+        if section.section.name == '.dynsym':
             self._batch_remove_relocs(sorted_list, self._rel_plt)
-            self._batch_remove_relocs(sorted_list, self._rel_dyn, push=True)
             self._batch_remove_elf_hash(sorted_list)
             self._batch_remove_gnu_versions(sorted_list, original_num_entries)
             self._batch_remove_gnu_hashtable(sorted_list, original_num_entries)
@@ -786,9 +799,7 @@ class ELFRemove:
         for start, size in func_tuple_list:
             #### Overwrite function with null bytes ####
             self._log('\t' + str(start) + ': overwriting text segment of local function')
-            #self._edit_rel_sect(self._rel_dyn, 0xffffffff, func.name, push=True)
             self._f.seek(start)
-
             self._f.write(b'\xCC' * size)
 
         if(self.symtab != None):
