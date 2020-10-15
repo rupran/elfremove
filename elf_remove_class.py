@@ -290,12 +290,50 @@ class ELFRemove:
         else:
             ent_size = 8 # Elf32_rel struct size, x86 always rel
 
-        if self._reloc_list is None:
-            self._reloc_list = list(section.section.iter_relocations())
+        orig_reloc_list = list(section.section.iter_relocations())
+        self._reloc_list = sorted(orig_reloc_list,
+                                  key = lambda x: x.entry['r_info_sym'])
+
+        # Quicker lookup if we really need to iterate over the relocations
+        sym_nrs = set(x.entry['r_info_sym'] for x in self._reloc_list)
+        sym_addrs = set(x.entry['r_addend'] for x in self._reloc_list)
 
         removed = 0
         for symbol in symbol_list:
+            # If the symbol to removed is neither referenced via its symbol
+            # index nor by its address, we don't need to iterate the relocation
+            # table at all.
+            if symbol.count not in sym_nrs and symbol.value not in sym_addrs:
+                continue
             removed += self._edit_rel_sect(self._reloc_list, symbol.count, symbol.value, ent_size, push)
+            sym_nrs.discard(symbol.count)
+            sym_addrs.discard(symbol.value)
+
+        # For all removed symbols, we need to fix up the symbol table indices
+        # of all 'later' symbols. Here, we use that the relocations _and_ the
+        # symbols to be removed are sorted by their indices: we only need to
+        # rewrite entries in the relocation table with higher indices than the
+        # index of the removed symbol, and those are now always at the back of
+        # the relocation list). By starting with the highest symbol table index
+        # first (as given in symbol_list), we further reduce the number of
+        # iterations over the relocation list.
+        for symbol in symbol_list:
+            cur_idx = len(self._reloc_list) - 1
+            while cur_idx >= 0:
+                reloc = self._reloc_list[cur_idx]
+                r_info_sym = reloc.entry['r_info_sym']
+                if r_info_sym < symbol.count:
+                    break
+                new_sym = r_info_sym - 1
+                old_type = reloc.entry['r_info_type']
+                if ent_size == 8:
+                    reloc.entry['r_info'] = new_sym << 8 | (old_type & 0xFF)
+                else:
+                    reloc.entry['r_info'] = new_sym << 32 | (old_type & 0xFFFFFFFF)
+                reloc.entry['r_info_sym'] = new_sym
+                cur_idx -= 1
+
+        # restore old order of relocation list
 
         # Write whole section out at once
         offset = section.section.header['sh_offset']
@@ -337,7 +375,6 @@ class ELFRemove:
     def _edit_rel_sect(self, reloc_list, sym_nr, sym_addr, ent_size, push=False):
         removed = 0
         cur_idx = 0
-        #print('list based removal for {}'.format(hex(sym_addr)))
         list_len = len(reloc_list)
         while cur_idx < list_len:
             reloc = reloc_list[cur_idx]
@@ -352,14 +389,12 @@ class ELFRemove:
                     reloc.entry['r_info_sym'] = 0
                     if ent_size == 24:
                         reloc.entry['r_addend'] = 0
+            # This only works because the relocation entries are sorted and
+            # R_XX_RELATIVE relocations (which might have their r_addend field
+            # set to the address of our symbol) are required to have 0 as their
+            # symbol table index (and thus always come first).
             elif r_info_sym > sym_nr:
-                new_sym = r_info_sym - 1
-                old_type = reloc.entry['r_info_type']
-                if ent_size == 8:
-                    reloc.entry['r_info'] = new_sym << 8 | (old_type & 0xFF)
-                else:
-                    reloc.entry['r_info'] = new_sym << 32 | (old_type & 0xFFFFFFFF)
-                reloc.entry['r_info_sym'] = new_sym
+                break
 
             cur_idx += 1
 
@@ -659,7 +694,6 @@ class ELFRemove:
         if section.section.name == '.dynsym':
             self.dynsym = section
             self._batch_remove_relocs(sorted_list, self._rel_plt)
-            self._reloc_list = None
             self._batch_remove_relocs(sorted_list, self._rel_dyn, push=True)
             self._batch_remove_elf_hash(sorted_list)
             self._batch_remove_gnu_versions(sorted_list, original_num_entries)
