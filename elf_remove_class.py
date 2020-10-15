@@ -52,7 +52,6 @@ class ELFRemove:
         self._elf_hash = None
         self._dynamic = None
         self._blacklist = ["_init", "_fini"]
-        self._reloc_list = None
 
         #### check for supported architecture ####
         if(self._elffile.header['e_machine'] != 'EM_X86_64' and self._elffile.header['e_machine'] != 'EM_386'):
@@ -290,24 +289,30 @@ class ELFRemove:
         else:
             ent_size = 8 # Elf32_rel struct size, x86 always rel
 
+        # Sort the relocation table by the symbol indices. This allows faster
+        # rewriting when we actually delete entries from the table, see the
+        # comments below.
         orig_reloc_list = list(section.section.iter_relocations())
-        self._reloc_list = sorted(orig_reloc_list,
-                                  key = lambda x: x.entry['r_info_sym'])
+        reloc_list = sorted(orig_reloc_list, key = lambda x: x.entry['r_info_sym'])
 
         # Quicker lookup if we really need to iterate over the relocations
-        sym_nrs = set(x.entry['r_info_sym'] for x in self._reloc_list)
-        sym_addrs = set(x.entry['r_addend'] for x in self._reloc_list)
+        sym_nrs = set(x.entry['r_info_sym'] for x in reloc_list)
+        sym_addrs = set(x.entry['r_addend'] for x in reloc_list)
 
         removed = 0
         for symbol in symbol_list:
-            # If the symbol to removed is neither referenced via its symbol
-            # index nor by its address, we don't need to iterate the relocation
-            # table at all.
-            if symbol.count not in sym_nrs and symbol.value not in sym_addrs:
-                continue
-            removed += self._edit_rel_sect(self._reloc_list, symbol.count,
+            # If the symbol to be removed is neither referenced via its address
+            # (for both .symtab and .dynsym) nor by its index (only in case of
+            # .dynsym), we don't need to iterate the relocation table at all.
+            if symbol.value not in sym_addrs:
+                if is_symtab:
+                    continue
+                if symbol.count not in sym_nrs:
+                    continue
+            removed += self._edit_rel_sect(reloc_list, symbol.count,
                                            symbol.value, ent_size, push, is_symtab)
-            sym_nrs.discard(symbol.count)
+            if not is_symtab:
+                sym_nrs.discard(symbol.count)
             sym_addrs.discard(symbol.value)
 
         # For all removed symbols, we need to fix up the symbol table indices
@@ -319,12 +324,13 @@ class ELFRemove:
         # first (as given in symbol_list), we further reduce the number of
         # iterations over the relocation list. Note that this must only be done
         # for the .dynsym section and not if we delete relocations referring to
-        # local functions from .symtab.
+        # local functions from .symtab (as the indices always reference symbols
+        # in .dynsym)
         if not is_symtab:
             for symbol in symbol_list:
-                cur_idx = len(self._reloc_list) - 1
+                cur_idx = len(reloc_list) - 1
                 while cur_idx >= 0:
-                    reloc = self._reloc_list[cur_idx]
+                    reloc = reloc_list[cur_idx]
                     r_info_sym = reloc.entry['r_info_sym']
                     if r_info_sym < symbol.count:
                         break
@@ -337,7 +343,16 @@ class ELFRemove:
                     reloc.entry['r_info_sym'] = new_sym
                     cur_idx -= 1
 
-        # restore old order of relocation list
+        # restore old order of relocation list - not sure if we're really
+        # required to do this but it doesn't hurt performance too badly
+        new_reloc_list = []
+        lookup_dict = {reloc.entry['r_offset']: reloc for reloc in reloc_list}
+        for orig_reloc in orig_reloc_list:
+            new_reloc = lookup_dict.get(orig_reloc.entry['r_offset'], None)
+            if new_reloc:
+                new_reloc_list.append(new_reloc)
+
+        reloc_list = new_reloc_list
 
         # Write whole section out at once
         offset = section.section.header['sh_offset']
@@ -350,7 +365,7 @@ class ELFRemove:
         self._f.seek(offset)
 
         endianness = '<' if self._byteorder == 'little' else '>'
-        for reloc in self._reloc_list:
+        for reloc in reloc_list:
             if ent_size == 24:
                 cur_val = struct.pack(endianness + 'QqQ', reloc.entry['r_offset'],
                                         reloc.entry['r_info'], reloc.entry['r_addend'])
@@ -701,12 +716,12 @@ class ELFRemove:
         self._change_section_size(section, removed * sh_entsize)
         section = SectionWrapper(section.section, section.index, section.version + 1)
 
-        if section.section.name == '.dynsym':
-            self.dynsym = section
-
+        #TODO: check if symtab relocation removal really works, we didnt do
+        # this so far.
         self._batch_remove_relocs(sorted_list, self._rel_dyn, push=True,
                                   is_symtab=(section.section.name=='.symtab'))
         if section.section.name == '.dynsym':
+            self.dynsym = section
             self._batch_remove_relocs(sorted_list, self._rel_plt)
             self._batch_remove_elf_hash(sorted_list)
             self._batch_remove_gnu_versions(sorted_list, original_num_entries)
