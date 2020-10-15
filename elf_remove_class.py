@@ -96,7 +96,7 @@ class ELFRemove:
             paths = [os.path.join(DEBUG_DIR, os.path.basename(filename))]
             id_section = self._elffile.get_section_by_name('.note.gnu.build-id')
             if not id_section:
-                print('no id_section')
+                self._log('no id_section')
                 return
 
             for note in id_section.iter_notes():
@@ -108,7 +108,7 @@ class ELFRemove:
                                              build_id[2:] + '.debug'))
             for path in paths:
                 if not os.path.isfile(path):
-                    print('no path {}'.format(path))
+                    self._log('no path {}'.format(path))
                     continue
                 try:
                     external_elf = ELFFile(open(path, 'rb'))
