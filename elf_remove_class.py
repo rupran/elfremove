@@ -280,27 +280,51 @@ class ELFRemove:
         self._f.write(new_val)
 
 
+    def _reloc_get_addend_RELA(self, reloc):
+        return reloc.entry['r_addend']
+
+    def _reloc_set_addend_RELA(self, reloc, value):
+        reloc.entry['r_addend'] = value
+
+    def _reloc_get_addend_REL(self, reloc):
+        target = reloc['r_offset']
+        off = next(self._elffile.address_offsets(target))
+        self._f.seek(off)
+        addend = struct.unpack('<' if self._byteorder == 'little' else '>' + 'I',
+                               self.fd.read(4))[0]
+        return addend
+
+    def _reloc_set_addend_REL(self, reloc, value):
+        target = reloc['r_offset']
+        off = next(self._elffile.address_offsets(target))
+        self._f.seek(off)
+        addend = struct.pack('<' if self._byteorder == 'little' else '>' + 'I',
+                             value)
+        self._f.write(addend)
+
     def _batch_remove_relocs(self, symbol_list, section, push=False, is_symtab=False):
         if section is None:
             return
 
-        if(self._elffile.header['e_machine'] == 'EM_X86_64'):
+        if(section.section.is_RELA()):
             ent_size = 24 # Elf64_rela struct size, x64 always rela?
+            getter_addend = self._reloc_get_addend_RELA
+            setter_addend = self._reloc_set_addend_RELA
         else:
             ent_size = 8 # Elf32_rel struct size, x86 always rel
+            getter_addend = self._reloc.get_addend_REL
+            setter_addend = self._reloc_set_addend_REL
 
         # Sort the relocation table by the symbol indices. This allows faster
         # rewriting when we actually delete entries from the table, see the
         # comments below.
         orig_reloc_list = list(section.section.iter_relocations())
-        # TODO: handle r_addend correctly when dealing with Elf32_rel -> not
-        # present as struct member
         reloc_list = sorted(orig_reloc_list,
-                            key = lambda x: (x.entry['r_info_sym'], x.entry['r_addend']))
+                            key = lambda x: (x.entry['r_info_sym'], getter_addend(x)))
 
         # Quicker lookup if we really need to iterate over the relocations
         sym_nrs = set(x.entry['r_info_sym'] for x in reloc_list)
-        sym_addrs = set(x.entry['r_addend'] for x in reloc_list)
+        sym_addrs = set(getter_addend(x) for x in reloc_list)
 
         removed = 0
         for symbol in symbol_list:
@@ -313,7 +337,8 @@ class ELFRemove:
                 if symbol.count not in sym_nrs:
                     continue
             removed += self._edit_rel_sect(reloc_list, symbol.count,
-                                           symbol.value, ent_size, push, is_symtab)
+                                           symbol.value, getter_addend,
+                                           setter_addend, push, is_symtab)
             if not is_symtab:
                 sym_nrs.discard(symbol.count)
             sym_addrs.discard(symbol.value)
@@ -367,7 +392,6 @@ class ELFRemove:
                 reloc.entry['r_info_sym'] = new_sym
                 cur_reloc_idx -= 1
 
-
         # restore old order of relocation list - not sure if we're really
         # required to do this but it doesn't hurt performance too badly
         new_reloc_list = []
@@ -393,10 +417,10 @@ class ELFRemove:
         for reloc in reloc_list:
             if ent_size == 24:
                 cur_val = struct.pack(endianness + 'QqQ', reloc.entry['r_offset'],
-                                        reloc.entry['r_info'], reloc.entry['r_addend'])
+                                      reloc.entry['r_info'], reloc.entry['r_addend'])
             else:
                 cur_val = struct.pack(endianness + 'Ii', reloc.entry['r_offset'],
-                                        reloc.entry['r_info'])
+                                      reloc.entry['r_info'])
             self._f.write(cur_val)
 
         # Change the size in the section header
@@ -416,14 +440,15 @@ class ELFRemove:
 
     Description: adapts the entries of the given relocation section to the changed dynsym
     '''
-    def _edit_rel_sect(self, reloc_list, sym_nr, sym_addr, ent_size, push=False, is_symtab=False):
+    def _edit_rel_sect(self, reloc_list, sym_nr, sym_addr, getter_addend,
+                       setter_addend, push=False, is_symtab=False):
         removed = 0
         cur_idx = 0
         list_len = len(reloc_list)
         while cur_idx < list_len:
             reloc = reloc_list[cur_idx]
             r_info_sym = reloc.entry['r_info_sym']
-            if (not is_symtab and r_info_sym == sym_nr) or reloc.entry['r_addend'] == sym_addr:
+            if (not is_symtab and r_info_sym == sym_nr) or getter_addend(reloc) == sym_addr:
                 if push:
                     reloc_list.pop(cur_idx)
                     removed += 1
@@ -431,17 +456,15 @@ class ELFRemove:
                     continue
                 else:
                     reloc.entry['r_info_sym'] = 0
-                    if ent_size == 24:
-                        reloc.entry['r_addend'] = 0
+                    setter_addend(reloc, 0)
             # If we're processing a .symtab, we can only look at R_XX_RELATIVE
             # relocations and thus have to stop when the relocation entry
             # references a symbol that's part of .dynsym. Additionally, we can
             # stop processing when we reach an addend higher than our currently
             # looked at symbol as the table is sorted by the addend as a second
             # key.
-            elif is_symtab:
-                if reloc.entry['r_addend'] > sym_addr or r_info_sym > 0:
-                    break
+            elif is_symtab and (getter_addend(reloc) > sym_addr or r_info_sym > 0):
+                break
             # This break works because the relocation entries are sorted and
             # R_XX_RELATIVE relocations (which might have their r_addend field
             # set to the address of our symbol) are required to have 0 as their
