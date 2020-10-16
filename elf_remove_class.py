@@ -362,10 +362,12 @@ class ELFRemove:
             while cur_reloc_idx > 0:
                 reloc = reloc_list[cur_reloc_idx]
                 r_info_sym = reloc.entry['r_info_sym']
-                # If we reached the relocations without symbol indices, we're
-                # done.
+                # If we are working on a relocation section with no
+                # intentionally zeroed entries and we have reached the
+                # relocationswithout symbol indices, we're done.
                 if r_info_sym == 0:
-                    break
+                    if push:
+                        break
                 # If we found a relocation that references a symbol with a
                 # lower index than the currently looked at symbol, we need to
                 # 'skip over' the removed symbol and account for it in the
@@ -380,8 +382,13 @@ class ELFRemove:
                     continue
                 # Fix the current relocation by subtracting the difference in
                 # symbol indices caused by the removal of functions with lower
-                # indices in the original .dynsym
-                new_sym = r_info_sym - num_earlier_removed_symbols
+                # indices in the original .dynsym. If the symbol was zero
+                # already (for example if it was zeroed intentionally), leave
+                # it as it is
+                if r_info_sym == 0:
+                    new_sym = 0
+                else:
+                    new_sym = r_info_sym - num_earlier_removed_symbols
                 old_type = reloc.entry['r_info_type']
                 if ent_size == 8:
                     reloc.entry['r_info'] = new_sym << 8 | (old_type & 0xFF)
