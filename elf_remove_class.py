@@ -43,6 +43,7 @@ class ELFRemove:
         self._f = open(filename, 'r+b', buffering=0)
         self._elffile = ELFFile(self._f)
         self._byteorder = 'little' if self._elffile.little_endian else 'big'
+        self._endianness = '<' if self._elffile.little_endian else '>'
         self._gnu_hash = None
         self.dynsym = None
         self.symtab = None
@@ -269,11 +270,10 @@ class ELFRemove:
         f_off = dynamic_section._offset + relasz[0] * dynamic_section._tagsize
         self._f.seek(f_off)
         val = self._f.read(dynamic_section._tagsize)
-        struct_string = '<' if self._byteorder == 'little' else '>'
         if dynamic_section._tagsize == 8:
-            struct_string += 'iI'
+            struct_string = self._endianness + 'iI'
         else:
-            struct_string += 'qQ'
+            struct_string = self._endianness + 'qQ'
         tagno, sz = struct.unpack(struct_string, val)
         new_val = struct.pack(struct_string, tagno, sz - amount)
         self._f.seek(f_off)
@@ -290,16 +290,14 @@ class ELFRemove:
         target = reloc['r_offset']
         off = next(self._elffile.address_offsets(target))
         self._f.seek(off)
-        addend = struct.unpack('<' if self._byteorder == 'little' else '>' + 'I',
-                               self.fd.read(4))[0]
+        addend = struct.unpack(self._endianness + 'I', self.fd.read(4))[0]
         return addend
 
     def _reloc_set_addend_REL(self, reloc, value):
         target = reloc['r_offset']
         off = next(self._elffile.address_offsets(target))
         self._f.seek(off)
-        addend = struct.pack('<' if self._byteorder == 'little' else '>' + 'I',
-                             value)
+        addend = struct.pack(self._endianness + 'I', value)
         self._f.write(addend)
 
     def _batch_remove_relocs(self, symbol_list, section, push=False, is_symtab=False):
@@ -413,13 +411,12 @@ class ELFRemove:
         # Write all entries out
         self._f.seek(offset)
 
-        endianness = '<' if self._byteorder == 'little' else '>'
         for reloc in reloc_list:
             if ent_size == 24:
-                cur_val = struct.pack(endianness + 'QqQ', reloc.entry['r_offset'],
+                cur_val = struct.pack(self._endianness + 'QqQ', reloc.entry['r_offset'],
                                       reloc.entry['r_info'], reloc.entry['r_addend'])
             else:
-                cur_val = struct.pack(endianness + 'Ii', reloc.entry['r_offset'],
+                cur_val = struct.pack(self._endianness + 'Ii', reloc.entry['r_offset'],
                                       reloc.entry['r_info'])
             self._f.write(cur_val)
 
@@ -495,14 +492,14 @@ class ELFRemove:
         # ElfXX_Half integers
         self._f.seek(self._gnu_version.section.header['sh_offset'])
         section_bytes = self._f.read(orig_dynsym_size * ent_size)
-        fmt_str = ('<' if self._byteorder == 'little' else '>') + str(orig_dynsym_size) + 'H'
+        fmt_str = self._endianness + str(orig_dynsym_size) + 'H'
         versions = list(struct.unpack(fmt_str, section_bytes))
 
         for symbol in symbol_list:
             versions.pop(symbol.count)
 
         # Build and write the new versions section
-        fmt_str = ('<' if self._byteorder == 'little' else '>') + str(len(versions)) + 'H'
+        fmt_str = self._endianness + str(len(versions)) + 'H'
         new_section_bytes = struct.pack(fmt_str, *versions)
         self._f.seek(self._gnu_version.section.header['sh_offset'])
         self._f.write(new_section_bytes)
@@ -662,7 +659,7 @@ class ELFRemove:
         bucket_offset = self._gnu_hash.section.header['sh_offset'] + 4 * 4 + bloomsize * bloom_entry
 
         ### Set new Bucket start values ###
-        fmt_str = ('<' if self._byteorder == 'little' else '>') + str(nbuckets - bucket_nr - 1) + 'I'
+        fmt_str = self._endianness + str(nbuckets - bucket_nr - 1) + 'I'
         self._f.seek(bucket_offset + (bucket_nr + 1) * 4)
         read_bytes = self._f.read((nbuckets - bucket_nr - 1) * 4)
         buckets = list(struct.unpack(fmt_str, read_bytes))
