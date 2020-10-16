@@ -293,7 +293,10 @@ class ELFRemove:
         # rewriting when we actually delete entries from the table, see the
         # comments below.
         orig_reloc_list = list(section.section.iter_relocations())
-        reloc_list = sorted(orig_reloc_list, key = lambda x: x.entry['r_info_sym'])
+        # TODO: handle r_addend correctly when dealing with Elf32_rel -> not
+        # present as struct member
+        reloc_list = sorted(orig_reloc_list,
+                            key = lambda x: (x.entry['r_info_sym'], x.entry['r_addend']))
 
         # Quicker lookup if we really need to iterate over the relocations
         sym_nrs = set(x.entry['r_info_sym'] for x in reloc_list)
@@ -321,27 +324,49 @@ class ELFRemove:
         # rewrite entries in the relocation table with higher indices than the
         # index of the removed symbol, and those are now always at the back of
         # the relocation list). By starting with the highest symbol table index
-        # first (as given in symbol_list), we further reduce the number of
-        # iterations over the relocation list. Note that this must only be done
-        # for the .dynsym section and not if we delete relocations referring to
-        # local functions from .symtab (as the indices always reference symbols
-        # in .dynsym)
+        # first (as given in symbol_list), we only need one iteration over the
+        # relocation list to fix up all indices. Note that this must only be
+        # done for the .dynsym section and not if we delete relocations
+        # referring to local functions from .symtab (as the indices always
+        # reference symbols in .dynsym)
         if not is_symtab:
-            for symbol in symbol_list:
-                cur_idx = len(reloc_list) - 1
-                while cur_idx >= 0:
-                    reloc = reloc_list[cur_idx]
-                    r_info_sym = reloc.entry['r_info_sym']
-                    if r_info_sym < symbol.count:
+            cur_symbol_idx = 0
+            cur_symbol = symbol_list[cur_symbol_idx]
+            cur_reloc_idx = len(reloc_list) - 1
+            num_earlier_removed_symbols = len(symbol_list)
+            # The relocation list is sorted from low to high symbol indices so
+            # we need to start at the back.
+            while cur_reloc_idx > 0:
+                reloc = reloc_list[cur_reloc_idx]
+                r_info_sym = reloc.entry['r_info_sym']
+                # If we reached the relocations without symbol indices, we're
+                # done.
+                if r_info_sym == 0:
+                    break
+                # If we found a relocation that references a symbol with a
+                # lower index than the currently looked at symbol, we need to
+                # 'skip over' the removed symbol and account for it in the
+                # number subtracted from the following relocations
+                elif r_info_sym <= cur_symbol.count:
+                    num_earlier_removed_symbols -= 1
+                    # There are no earlier symbols left, we're done
+                    if num_earlier_removed_symbols == 0:
                         break
-                    new_sym = r_info_sym - 1
-                    old_type = reloc.entry['r_info_type']
-                    if ent_size == 8:
-                        reloc.entry['r_info'] = new_sym << 8 | (old_type & 0xFF)
-                    else:
-                        reloc.entry['r_info'] = new_sym << 32 | (old_type & 0xFFFFFFFF)
-                    reloc.entry['r_info_sym'] = new_sym
-                    cur_idx -= 1
+                    cur_symbol_idx += 1
+                    cur_symbol = symbol_list[cur_symbol_idx]
+                    continue
+                # Fix the current relocation by subtracting the difference in
+                # symbol indices caused by the removal of functions with lower
+                # indices in the original .dynsym
+                new_sym = r_info_sym - num_earlier_removed_symbols
+                old_type = reloc.entry['r_info_type']
+                if ent_size == 8:
+                    reloc.entry['r_info'] = new_sym << 8 | (old_type & 0xFF)
+                else:
+                    reloc.entry['r_info'] = new_sym << 32 | (old_type & 0xFFFFFFFF)
+                reloc.entry['r_info_sym'] = new_sym
+                cur_reloc_idx -= 1
+
 
         # restore old order of relocation list - not sure if we're really
         # required to do this but it doesn't hurt performance too badly
@@ -410,9 +435,12 @@ class ELFRemove:
                         reloc.entry['r_addend'] = 0
             # If we're processing a .symtab, we can only look at R_XX_RELATIVE
             # relocations and thus have to stop when the relocation entry
-            # references a symbol that's part of .dynsym.
+            # references a symbol that's part of .dynsym. Additionally, we can
+            # stop processing when we reach an addend higher than our currently
+            # looked at symbol as the table is sorted by the addend as a second
+            # key.
             elif is_symtab:
-                if r_info_sym > 0:
+                if reloc.entry['r_addend'] > sym_addr or r_info_sym > 0:
                     break
             # This break works because the relocation entries are sorted and
             # R_XX_RELATIVE relocations (which might have their r_addend field
