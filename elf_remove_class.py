@@ -4,6 +4,7 @@ import sys
 import binascii
 import struct
 import collections
+import bisect
 
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import Section, NoteSection, StringTableSection, SymbolTableSection
@@ -319,6 +320,7 @@ class ELFRemove:
         orig_reloc_list = list(section.section.iter_relocations())
         reloc_list = sorted(orig_reloc_list,
                             key = lambda x: (x.entry['r_info_sym'], getter_addend(x)))
+        sort_keys = [(x.entry['r_info_sym'], getter_addend(x)) for x in reloc_list]
 
         # Quicker lookup if we really need to iterate over the relocations
         sym_nrs = set(x.entry['r_info_sym'] for x in reloc_list)
@@ -334,7 +336,7 @@ class ELFRemove:
                     continue
                 if symbol.count not in sym_nrs:
                     continue
-            removed += self._edit_rel_sect(reloc_list, symbol.count,
+            removed += self._edit_rel_sect(reloc_list, sort_keys, symbol.count,
                                            symbol.value, getter_addend,
                                            setter_addend, push, is_symtab)
             if not is_symtab:
@@ -444,10 +446,16 @@ class ELFRemove:
 
     Description: adapts the entries of the given relocation section to the changed dynsym
     '''
-    def _edit_rel_sect(self, reloc_list, sym_nr, sym_addr, getter_addend,
+    def _edit_rel_sect(self, reloc_list, sort_keys, sym_nr, sym_addr, getter_addend,
                        setter_addend, push=False, is_symtab=False):
         removed = 0
-        cur_idx = 0
+        # Search the sorted list of relocations for a R_XX_RELATIVE relocation
+        # with the address sym_addr
+        cur_idx = bisect.bisect_left(sort_keys, (0, sym_addr))
+        # If there is no such relocation, skip forward to the first relocation
+        # with the symbol index we're removing.
+        if not is_symtab and sort_keys[cur_idx][1] != sym_addr:
+            cur_idx = bisect.bisect_left(sort_keys, (sym_nr, 0), cur_idx)
         list_len = len(reloc_list)
         while cur_idx < list_len:
             reloc = reloc_list[cur_idx]
@@ -455,6 +463,7 @@ class ELFRemove:
             if (not is_symtab and r_info_sym == sym_nr) or getter_addend(reloc) == sym_addr:
                 if push:
                     reloc_list.pop(cur_idx)
+                    sort_keys.pop(cur_idx)
                     removed += 1
                     list_len -= 1
                     continue
@@ -475,6 +484,12 @@ class ELFRemove:
             # symbol table index (and thus always come first).
             elif r_info_sym > sym_nr:
                 break
+            # If we're dealing with symbol indices, search forward for the next
+            # entry with the corresponding symbol_number. We will end up in this
+            # case when all R_XX_relative entries with (0, sym_addr) have been
+            # removed from the relocation table.
+            elif not is_symtab:
+                cur_idx = bisect.bisect_left(sort_keys, (sym_nr, 0), cur_idx)
 
             cur_idx += 1
 
