@@ -5,6 +5,7 @@ import binascii
 import struct
 import collections
 import bisect
+import logging
 
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import Section, NoteSection, StringTableSection, SymbolTableSection
@@ -39,8 +40,7 @@ class ELFRemove:
     Description: Is automatically called on object creation.
              Opens the given library and searches for the requiered sections.
     '''
-    def __init__(self, filename, debug = False):
-        self._debug = debug
+    def __init__(self, filename):
         self._f = open(filename, 'r+b', buffering=0)
         self._elffile = ELFFile(self._f)
         self._byteorder = 'little' if self._elffile.little_endian else 'big'
@@ -59,32 +59,33 @@ class ELFRemove:
         if(self._elffile.header['e_machine'] != 'EM_X86_64' and self._elffile.header['e_machine'] != 'EM_386'):
             raise Exception('Wrong Architecture!')
 
+        logging.info('* creating removal class for file \'%s\'', filename)
         section_no = 0
         # search for supported sections and remember (Section-Object, Section Nr., Version Counter)
         for sect in self._elffile.iter_sections():
             if(sect.name == '.gnu.hash'):
-                self._log('    Found \'GNU_HASH\' section!')
+                logging.debug('* Found \'GNU_HASH\' section!')
                 self._gnu_hash = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.hash'):
-                self._log('    Found \'HASH\' section!')
+                logging.debug('* Found \'HASH\' section!')
                 self._elf_hash = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.dynsym'):
-                self._log('    Found \'DYNSYM\' section!')
+                logging.debug('* Found \'DYNSYM\' section!')
                 self.dynsym = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.symtab'):
-                self._log('    Found \'SYMTAB\' section!')
+                logging.debug('* Found \'SYMTAB\' section!')
                 self.symtab = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.gnu.version'):
-                self._log('    Found \'GNU_VERSION\' section!')
+                logging.debug('* Found \'GNU_VERSION\' section!')
                 self._gnu_version = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.rel.plt' or sect.name == '.rela.plt'):
-                self._log('    Found \'RELA_PLT\' section!')
+                logging.debug('* Found \'RELA_PLT\' section!')
                 self._rel_plt = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.rel.dyn' or sect.name == '.rela.dyn'):
-                self._log('    Found \'RELA_DYN\' section!')
+                logging.debug('* Found \'RELA_DYN\' section!')
                 self._rel_dyn = SectionWrapper(sect, section_no, 0)
             if(sect.name == '.dynamic'):
-                self._log('    Found \'DYNAMIC\' section!')
+                logging.debug('* Found \'DYNAMIC\' section!')
                 self._dynamic = SectionWrapper(sect, section_no, 0)
             section_no += 1
 
@@ -97,7 +98,7 @@ class ELFRemove:
             paths = [os.path.join(DEBUG_DIR, os.path.basename(filename))]
             id_section = self._elffile.get_section_by_name('.note.gnu.build-id')
             if not id_section:
-                self._log('no id_section')
+                logging.debug('no id_section')
                 return
 
             for note in id_section.iter_notes():
@@ -109,7 +110,7 @@ class ELFRemove:
                                              build_id[2:] + '.debug'))
             for path in paths:
                 if not os.path.isfile(path):
-                    self._log('no path {}'.format(path))
+                    logging.debug('no path %s', path)
                     continue
                 try:
                     external_elf = ELFFile(open(path, 'rb'))
@@ -123,12 +124,12 @@ class ELFRemove:
                     continue
 
         if self.symtab:
-            self._log('Found a .symtab section for {}'.format(filename))
+            logging.debug('* found a .symtab section for %s', filename)
 
 
         # fallback if section headers have been stripped from the binary
         if(self.dynsym == None and self.symtab == None):
-            self._log("No section headers found in ELF, fallback to dynamic segment!")
+            logging.info("* No section headers found in ELF, fallback to dynamic segment!")
             for seg in self._elffile.iter_segments():
                 if(isinstance(seg, DynamicSegment)):
 
@@ -136,21 +137,21 @@ class ELFRemove:
                     size = seg.num_symbols() * seg.elfstructs.Elf_Sym.sizeof()
                     _, offset = seg.get_table_offset('DT_SYMTAB')
                     self.dynsym = SectionWrapper(self._build_symtab_section('.dynsym', offset, size, seg.elfstructs.Elf_Sym.sizeof(), seg._get_stringtable()), -1, 0)
-                    self._log('    Found \'DYNSYM\' section!')
+                    logging.debug('* Found \'DYNSYM\' section!')
 
                     # search for all supported sections and build section object with needed entries
                     rel_plt_off = rel_plt_size = rel_dyn_off = rel_dyn_size = 0
                     for tag in seg.iter_tags():
                         if(tag['d_tag'] == "DT_GNU_HASH"):
-                            self._log('    Found \'GNU_HASH\' section!')
+                            logging.debug('* Found \'GNU_HASH\' section!')
                             _, offset = seg.get_table_offset(tag['d_tag'])
                             self._gnu_hash = SectionWrapper((self._build_section('.gnu.hash', offset, -1, 0, 0)), -1, 0)
                         if(tag['d_tag'] == "DT_HASH"):
-                            self._log('    Found \'HASH\' section!')
+                            logging.debug('* Found \'HASH\' section!')
                             _, offset = seg.get_table_offset(tag['d_tag'])
                             self._elf_hash = SectionWrapper((self._build_section('.hash', offset, -1, 0, 0)), -1, 0)
                         if(tag['d_tag'] == "DT_VERSYM"):
-                            self._log('    Found \'GNU_VERSION\' section!')
+                            logging.debug('* Found \'GNU_VERSION\' section!')
                             size = seg.num_symbols() * 2
                             _, offset = seg.get_table_offset(tag['d_tag'])
                             self._gnu_version = SectionWrapper(self._build_section('.gnu.version', offset, size, 2, 0), -1, 0)
@@ -171,19 +172,15 @@ class ELFRemove:
                     sec_type = 'SHT_RELA' if (self._elffile.header['e_machine'] == 'EM_X86_64') else 'SHT_REL'
 
                     if(rel_plt_off != 0 and rel_plt_size != 0):
-                        self._log('    Found \'' + sec_out_name + 'PLT\' section!')
+                        logging.debug('* Found \'' + sec_out_name + 'PLT\' section!')
                         self._rel_plt = SectionWrapper(self._build_relocation_section(sec_name + 'plt', rel_plt_off, rel_plt_size, ent_size, sec_type), -1, 0)
                     if(rel_dyn_off != 0 and rel_dyn_size != 0):
-                        self._log('    Found \'' + sec_out_name + 'DYN\' section!')
+                        logging.debug('* Found \'' + sec_out_name + 'DYN\' section!')
                         self._rel_dyn = SectionWrapper(self._build_relocation_section(sec_name + 'dyn', rel_dyn_off, rel_dyn_size, ent_size, sec_type), -1, 0)
 
 
     def __del__(self):
         self._f.close()
-
-    def _log(self, mes):
-        if(self._debug):
-            print('DEBUG: ' + mes)
 
     '''
     Helper functions for section-object creation
@@ -304,6 +301,7 @@ class ELFRemove:
         sym_nrs = set(x.entry['r_info_sym'] for x in reloc_list)
         sym_addrs = set(getter_addend(x) for x in reloc_list)
 
+        logging.debug(' * searching relocations to remove from %s', section.section.name)
         removed = 0
         for symbol in symbol_list:
             # If the symbol to be removed is neither referenced via its address
@@ -332,6 +330,7 @@ class ELFRemove:
         # done for the .dynsym section and not if we delete relocations
         # referring to local functions from .symtab (as the indices always
         # reference symbols in .dynsym)
+        logging.debug(' * fixing up remaining symbol indices')
         if not is_symtab:
             cur_symbol_idx = 0
             cur_symbol = symbol_list[cur_symbol_idx]
@@ -379,6 +378,7 @@ class ELFRemove:
 
         # restore old order of relocation list - not sure if we're really
         # required to do this but it doesn't hurt performance too badly
+        logging.debug(' * restoring original order of relocations')
         new_reloc_list = []
         lookup_dict = {reloc.entry['r_offset']: reloc for reloc in reloc_list}
         for orig_reloc in orig_reloc_list:
@@ -389,6 +389,7 @@ class ELFRemove:
         reloc_list = new_reloc_list
 
         # Write whole section out at once
+        logging.debug(' * writing relocation section %s to file', section.section.name)
         offset = section.section.header['sh_offset']
 
         # Zero the section first
@@ -416,6 +417,7 @@ class ELFRemove:
 
         # Shrink the number of relocation entries in the DYNAMIC segment
         self._shrink_dynamic_tag('DT_RELASZ', ent_size * removed)
+        logging.debug(' * done!')
 
     '''
     Function:   _edit_rel_sect
@@ -435,10 +437,12 @@ class ELFRemove:
         if not is_symtab and sort_keys[cur_idx][1] != sym_addr:
             cur_idx = bisect.bisect_left(sort_keys, (sym_nr, 0), cur_idx)
         list_len = len(reloc_list)
+        logging.debug('  * searching relocations for index %x/address %x', sym_nr, sym_addr)
         while cur_idx < list_len:
             reloc = reloc_list[cur_idx]
             r_info_sym = reloc.entry['r_info_sym']
             if (not is_symtab and r_info_sym == sym_nr) or getter_addend(reloc) == sym_addr:
+                logging.debug('   * found: relocation offset = %x, removing', reloc.entry['r_offset'])
                 if push:
                     reloc_list.pop(cur_idx)
                     sort_keys.pop(cur_idx)
@@ -603,7 +607,7 @@ class ELFRemove:
     def _edit_elf_hashtable(self, symbol_name, dynsym_nr, params):
         func_hash = self._elfhash(symbol_name)
         bucket_nr = func_hash % params['nbuckets']
-        self._log("\t" + symbol_name + ': adjust hash_section, hash = ' + hex(func_hash) + ' bucket = ' + str(bucket_nr))
+        logging.debug('\t%s: adjust hash_section, hash = %x bucket = %d', symbol_name, func_hash, bucket_nr)
 
         # find symbol and remove entry from chain
         cur_ptr = params['buckets'][bucket_nr]
@@ -676,7 +680,7 @@ class ELFRemove:
         ### calculate hash and bucket ###
         func_hash = self._gnuhash(symbol_name)
         bucket_nr = func_hash % nbuckets
-        self._log("\t" + symbol_name + ': adjust gnu_hash_section, hash = ' + hex(func_hash) + ' bucket = ' + str(bucket_nr))
+        logging.debug('\t%s: adjust gnu_hash_section, hash = %x bucket = %d', symbol_name, func_hash, bucket_nr)
 
         bucket_offset = self._gnu_hash.section.header['sh_offset'] + 4 * 4 + bloomsize * bloom_entry
 
@@ -745,6 +749,7 @@ class ELFRemove:
         if(len(collection) == 0):
             return
 
+        logging.info('* removing symbols from symbol table (%s)', section.section.name)
         # sort list by offset in symbol table
         # otherwise the index would be wrong after one Element was removed
         sorted_list = sorted(collection, reverse=True, key=lambda x: x.count)
@@ -755,13 +760,12 @@ class ELFRemove:
         max_entrys = (section.section.header['sh_size'] // sh_entsize)
         original_num_entries = max_entrys
 
-        self._log('In \'' + section.section.name + '\' section:')
         for symbol_t in sorted_list:
             # check if section was changed between the collection and removal of Symbols
             if(symbol_t.sec_version != section.version):
                 raise Exception('symbol_collection was generated for older revision of ' + section.section.name)
             #### Overwrite Symbol Table entry ####
-            self._log('\t' + symbol_t.name + ': deleting table entry')
+            logging.debug(' * %s: deleting table entry', symbol_t.name)
 
             # Only write to file if the section is actually part of the file
             if section.index != -1:
@@ -777,7 +781,7 @@ class ELFRemove:
             #### Overwrite function with zeros ####
             if(overwrite):
                 if symbol_t.value != 0 and symbol_t.size != 0:
-                    self._log('\t' + symbol_t.name + ': overwriting text segment with zeros')
+                    logging.debug('  * overwriting text segment with zeros')
                     self._f.seek(symbol_t.value)
                     self._f.write(b'\xcc' * symbol_t.size)
             removed += 1;
@@ -788,15 +792,21 @@ class ELFRemove:
 
         #TODO: check if symtab relocation removal really works, we didnt do
         # this so far.
+        logging.info('* adapting dynamic relocation entries')
         self._batch_remove_relocs(sorted_list, self._rel_dyn, push=True,
                                   is_symtab=(section.section.name=='.symtab'))
         if section.section.name == '.dynsym':
             self.dynsym = section
+            logging.info('* adapting PLT relocation entries')
             self._batch_remove_relocs(sorted_list, self._rel_plt)
+            logging.info('* adapting ELF-style hashes')
             self._batch_remove_elf_hash(sorted_list)
+            logging.info('* adapting symbol versions')
             self._batch_remove_gnu_versions(sorted_list, original_num_entries)
+            logging.info('* adapting GNU-style hashes')
             self._batch_remove_gnu_hashtable(sorted_list, original_num_entries)
 
+        logging.info('* ... done!')
         return removed
 
     '''
@@ -811,7 +821,7 @@ class ELFRemove:
     Description: removes the symbols from the given symboltable
     '''
     def collect_symbols_by_name(self, section, symbol_list, complement=False):
-        self._log('Searching in section: ' + section.section.name)
+        logging.debug('* searching symbols (by name) to delete in section: %s', section.section.name)
 
         #### Search for function in Symbol Table ####
         entry_cnt = -1
@@ -842,7 +852,7 @@ class ELFRemove:
         return found_symbols
 
     def collect_symbols_by_address(self, section, address_list, complement=False):
-        self._log('Searching in section: ' + section.section.name)
+        logging.debug('* searching symbols (by address) to delete in section: %s', section.section.name)
 
         #### Search for function in Symbol Table ####
         entry_cnt = -1
@@ -881,9 +891,10 @@ class ELFRemove:
     Description: overwrites the given functions in the text segment and removes the entries from symtab if present
     '''
     def overwrite_local_functions(self, func_tuple_list):
+        logging.debug('* overwriting local functions')
         for start, size in func_tuple_list:
             #### Overwrite function with null bytes ####
-            self._log('\t' + str(start) + ': overwriting text segment of local function')
+            logging.debug('  * %x: overwriting text segment of local function', start)
             self._f.seek(start)
             self._f.write(b'\xCC' * size)
 

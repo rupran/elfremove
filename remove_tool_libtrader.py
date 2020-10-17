@@ -3,6 +3,7 @@ import sys
 import os
 import argparse
 from shutil import copyfile
+import logging
 
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), '../librarytrader'))
 
@@ -17,10 +18,7 @@ parser.add_argument('--libonly', action="store_true", help='name of binary has t
 parser.add_argument('--overwrite', action="store_true", help='overwrite original library files, otherwise work with a copy in the current working directory')
 parser.add_argument('--addr_list', action="store_true", help='print list of addresses with size')
 parser.add_argument('-v', '--verbose', action="store_true", help='set verbosity')
-
-def log(mes):
-    if(args.verbose):
-        print(mes)
+parser.add_argument('--debug', action="store_true", help=argparse.SUPPRESS)
 
 def proc():
 
@@ -75,11 +73,11 @@ def proc():
         if(args.overwrite):
             ans = input("System library file \'" + lib.fullname + "\' will be changed! Are you sure? (yes):")
             if(ans == 'yes'):
-                elf_rem = ELFRemove(lib.fullname, args.verbose)
+                elf_rem = ELFRemove(lib.fullname)
             else:
                 continue
         else:
-            elf_rem = ELFRemove(filename, args.verbose)
+            elf_rem = ELFRemove(filename)
 
         if(elf_rem.dynsym == None):
             print('dynsym table not found in File!')
@@ -129,7 +127,7 @@ def proc():
             collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab, elf_rem.get_collection_names(collection_dynsym))
 
         # display statistics
-        elf_rem.print_collection_info(collection_dynsym, args.verbose, local)
+        elf_rem.print_collection_info(collection_dynsym, args.debug, local)
 
         if args.addr_list:
             elf_rem.print_collection_addr(collection_dynsym, local)
@@ -163,4 +161,12 @@ def proc():
 
 if __name__ == '__main__':
     args = parser.parse_args()
+    if args.verbose:
+        loglevel = logging.INFO
+    elif args.debug:
+        loglevel = logging.DEBUG
+    else:
+        loglevel = logging.WARNING
+    logging.basicConfig(format='%(asctime)s %(levelname)-7s %(message)s',
+                        level=loglevel)
     proc()

@@ -4,7 +4,7 @@ from elf_remove_class import ELFRemove
 import sys
 
 def proc(filename, functions):
-    elf_rem = ELFRemove(filename, True)
+    elf_rem = ELFRemove(filename)
 
     if(elf_rem.dynsym == None):
         print('dynsym table not found in File!')
