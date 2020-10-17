@@ -96,17 +96,17 @@ def proc():
             blacklist = [int(x.strip(), 10) for x in blacklist_s]
 
         # get all functions to remove from library
-        addr = []
+        addr = set()
         for key in store[lib.fullname].exported_addrs.keys():
             if(key not in blacklist):
                 value = store[lib.fullname].export_users[key]
                 if(not value):
-                    addr.append(key)
+                    addr.add(key)
             else:
                 print("In blacklist: " + str(key))
 
         # collect and remove local functions
-        local = []
+        local = set()
         if(args.local):
             for key in store[lib.fullname].local_functions.keys():
                 # TODO all keys double -> as string and int, why?
@@ -117,7 +117,7 @@ def proc():
                 if(key not in blacklist):
                     value = store[lib.fullname].local_users.get(key, [])
                     if(not value):
-                        local.append((key, store[lib.fullname].ranges[key]))
+                        local.add((key, store[lib.fullname].ranges[key]))
                 else:
                     print("Local in blacklist: " + str(key))
 
