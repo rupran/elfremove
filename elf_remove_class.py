@@ -12,7 +12,7 @@ from elftools.elf.sections import Section, NoteSection, StringTableSection, Symb
 from elftools.elf.relocation import RelocationSection
 from elftools.elf.dynamic import DynamicSegment
 from elftools.elf.enums import ENUM_D_TAG_COMMON
-from elftools.elf.hash import HashSection
+from elftools.elf.hash import ELFHashTable, GNUHashTable
 
 class SectionWrapper:
 
@@ -540,7 +540,9 @@ class ELFRemove:
     # temporary test function
     def test_hash_section(self):
         if(self._elf_hash != None):
-            sect = HashSection(self._elffile.stream, self._elf_hash.section.header['sh_offset'], self._elffile)
+            sect = ELFHashTable(self._elffile,
+                                self._elf_hash.section.header['sh_offset'],
+                                self.dynsym.section)
             # print hash section
             #for i in range (0, sect.params['nchains']):
             #    print(self.dynsym.section.get_symbol(i).name)
@@ -566,7 +568,9 @@ class ELFRemove:
         if self._elf_hash is None:
             return
 
-        sect = HashSection(self._elffile.stream, self._elf_hash.section.header['sh_offset'], self._elffile)
+        sect = ELFHashTable(self._elffile,
+                            self._elf_hash.section.header['sh_offset'],
+                            self.dynsym.section)
         params = {'nbuckets': sect.params['nbuckets'],
                   'nchains': sect.params['nchains'],
                   'buckets': sect.params['buckets'],
