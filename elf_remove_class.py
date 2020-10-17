@@ -186,28 +186,6 @@ class ELFRemove:
             print('DEBUG: ' + mes)
 
     '''
-    Hash-Functions for GNU and standard hash
-    '''
-    def _elfhash(self, func_name):
-        h = 0
-        g = 0
-        for c in func_name:
-            h = (h << 4) + ord(c)
-            h = h & 0xFFFFFFFF
-            g = h & 0xF0000000
-            if(g != 0):
-                h = h ^ (g >> 24)
-            h = h & ~g
-        return h
-
-    def _gnuhash(self, func_name):
-        h = 5381
-        for c in func_name:
-            h = (h << 5) + h + ord(c)
-            h = h & 0xFFFFFFFF
-        return h
-
-    '''
     Helper functions for section-object creation
     '''
     def _build_relocation_section(self, name, off, size, entsize, sec_type):
@@ -529,6 +507,28 @@ class ELFRemove:
         self._f.write(b'\00' * ((orig_dynsym_size - len(versions)) * ent_size))
 
         self._change_section_size(self._gnu_version, ent_size * len(symbol_list))
+
+    '''
+    Hash-Functions for GNU and standard hash
+    '''
+    def _elfhash(self, func_name):
+        h = 0
+        g = 0
+        for c in func_name:
+            h = (h << 4) + ord(c)
+            h = h & 0xFFFFFFFF
+            g = h & 0xF0000000
+            if(g != 0):
+                h = h ^ (g >> 24)
+            h = h & ~g
+        return h
+
+    def _gnuhash(self, func_name):
+        h = 5381
+        for c in func_name:
+            h = (h << 5) + h + ord(c)
+            h = h & 0xFFFFFFFF
+        return h
 
     '''
     Helper function to test the consitency of the standard hash section
