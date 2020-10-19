@@ -660,14 +660,23 @@ class ELFRemove:
                   'bloom_entry_size': 4 if self._elffile.header['e_machine'] == 'EM_386' else 8,
                   'buckets': list(sect.params['buckets'])}
 
+        bucket_start = self._gnu_hash.section['sh_offset'] + 4 * 4 + params['bloom_size'] * params['bloom_entry_size']
+        chain_start = bucket_start + 4 * params['nbuckets']
+
+        self._f.seek(chain_start)
+        nchains = dynsym_size - params['symoffset']
+        params['chains'] = list(struct.unpack(self._endianness + str(nchains) + 'I',
+                                              self._f.read(nchains * 4)))
+
         func_hashes = [self._gnuhash(symbol.name) for symbol in symbol_list]
         func_buckets = [func_hash % params['nbuckets'] for func_hash in func_hashes]
         if sorted(func_buckets, reverse=True) != func_buckets:
             raise(Exception, "bucket numbers of symbols to be deleted are not sorted!")
 
         for idx, symbol in enumerate(symbol_list):
-            self._edit_gnu_hashtable(symbol.name, symbol.count, func_hashes[idx],
-                                     func_buckets[idx], dynsym_size, params)
+            logging.debug('\t%s: adjust gnu_hash_section, hash = %x bucket = %d',
+                          symbol.name, func_hashes[idx], func_buckets[idx])
+            self._edit_gnu_hashtable(symbol.count, func_hashes[idx], params)
 
         # Fix bucket indices accounting for deleted symbols. Start from the
         # back as symbols (and therefore also their buckets) are sorted in
@@ -686,66 +695,56 @@ class ELFRemove:
             params['buckets'][max_idx] = max(0, params['buckets'][max_idx] - num_earlier_removed_symbols)
             max_idx -= 1
 
-        self._f.seek(self._gnu_hash.section.header['sh_offset'] + 4 * 4 + params['bloom_size'] * 8)
+        # Write out buckets
+        self._f.seek(bucket_start)
         buckets_bytes = struct.pack(self._endianness + str(params['nbuckets']) + 'I', *params['buckets'])
         self._f.write(buckets_bytes)
+        # We're automatically at chain_start here, so zero the old chains array
+        # and write the new contents
+        self._f.write(nchains * b'\00' * 4)
+        self._f.seek(chain_start)
+        chains_bytes = struct.pack(self._endianness + str(len(params['chains'])) + 'I', *params['chains'])
+        self._f.write(chains_bytes)
 
         self._change_section_size(self._gnu_hash, len(symbol_list) * 4)
 
+        #check_hash_table = GNUHashTable(self._elffile,
+        #                                self._gnu_hash.section['sh_offset'],
+        #                                self.dynsym.section)
+        #for symbol in self.dynsym.section.iter_symbols():
+        #    if symbol.entry['st_shndx'] == 'SHN_UNDEF':
+        #        continue
+        #    retval = check_hash_table.get_symbol(symbol.name)
+        #    if retval is None:
+        #        raise(Exception, 'symbol {} not found in hashtable!'.format(symbol.name))
+
+
     '''
     Function:   _edit_gnu_hashtable
-    Parameter:  symbol_name   = name of the Symbol to be removed
-                dynsym_nr     = nr of the given symbol in the dynsym table
+    Parameter:  dynsym_nr     = nr of the given symbol in the dynsym table
                 func_hash     = the hash of the symbol to be removed
-                func_bucket   = the corresponding bucket the symbol should be in
-                total_ent_sym = total entries of th dynsym section
                 params        = the parameters of the GNU hash table
 
     Description: removes the given Symbol from the '.gnu.hash' section
     '''
-    def _edit_gnu_hashtable(self, symbol_name, dynsym_nr, func_hash, func_bucket,
-                            total_ent_sym, params):
-        nbuckets = params['nbuckets']
-        symoffset = params['symoffset']
-        bloomsize = params['bloom_size']
-
-        logging.debug('\t%s: adjust gnu_hash_section, hash = %x bucket = %d',
-                      symbol_name, func_hash, func_bucket)
-
+    def _edit_gnu_hashtable(self, dynsym_nr, func_hash, params):
         ### remove deleted entry from bucket ###
-        bucket_offset = self._gnu_hash.section.header['sh_offset'] + 4 * 4 + bloomsize * params['bloom_entry_size']
         # check hash
-        sym_nr = dynsym_nr - symoffset
+        sym_nr = dynsym_nr - params['symoffset']
         if(sym_nr < 0):
             raise Exception('Function index out of bounds for gnu_hash_section! Index: ' + str(sym_nr))
-        self._f.seek(bucket_offset + nbuckets * 4 + sym_nr * 4)
-        bucket_hash_b = self._f.read(4)
 
-        bucket_hash = int.from_bytes(bucket_hash_b, self._byteorder, signed=False)
-
+        bucket_hash = params['chains'][sym_nr]
         # if this happens, sth on the library or hash function is broken!
         if((bucket_hash & ~0x1) != (func_hash & ~0x1)):
             raise Exception('calculated hash: ' + str(hex(func_hash)) + ' read hash: ' + str(hex(bucket_hash)))
 
         # copy all entrys afterwards up by one
-        total_ent = total_ent_sym - symoffset
-        self._f.seek(bucket_offset + nbuckets * 4 + (sym_nr + 1)  * 4)
-        later_hashes_b = self._f.read((total_ent - sym_nr - 1) * 4)
-        self._f.seek(bucket_offset + nbuckets * 4 + sym_nr * 4)
-        self._f.write(later_hashes_b)
-
-        # remove double last value
-        self._f.write(chr(0x0).encode('ascii') * 4)
+        params['chains'].pop(sym_nr)
 
         # if last bit is set, set it at the value before
         if((bucket_hash & 0x1) == 1 and sym_nr != 0):
-            self._f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
-            new_tail_b = self._f.read(4)
-            new_tail = int.from_bytes(new_tail_b, self._byteorder, signed=False)
-            # set with 'or' if already set
-            new_tail = new_tail ^ 0x00000001
-            self._f.seek(bucket_offset + nbuckets * 4 + (sym_nr - 1) * 4)
-            self._f.write(new_tail.to_bytes(4, self._byteorder))
+            params['chains'][sym_nr - 1] ^= 0x00000001
 
     '''
     Function:   remove_from_section
