@@ -293,13 +293,15 @@ class ELFRemove:
         # rewriting when we actually delete entries from the table, see the
         # comments below.
         orig_reloc_list = list(section.section.iter_relocations())
-        reloc_list = sorted(orig_reloc_list,
-                            key = lambda x: (x.entry['r_info_sym'], getter_addend(x)))
-        sort_keys = [(x.entry['r_info_sym'], getter_addend(x)) for x in reloc_list]
+        relocs = [(reloc, reloc.entry['r_info_sym'], getter_addend(reloc)) \
+                  for reloc in orig_reloc_list]
+        relocs = sorted(relocs, key = lambda x: (x[1], x[2]))
+        sort_keys = [(x[1], x[2]) for x in relocs]
 
-        # Quicker lookup if we really need to iterate over the relocations
-        sym_nrs = set(x.entry['r_info_sym'] for x in reloc_list)
-        sym_addrs = set(getter_addend(x) for x in reloc_list)
+        # Sets for quicker lookup if we really need to iterate over the
+        # relocations, relocations now sorted by symbol number and addend
+        reloc_list, sym_nrs, sym_addrs = zip(*relocs)
+        reloc_list, sym_nrs, sym_addrs = list(reloc_list), set(sym_nrs), set(sym_addrs)
 
         logging.debug(' * searching relocations to remove from %s', section.section.name)
         removed = 0
