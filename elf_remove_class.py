@@ -7,6 +7,7 @@ import collections
 import bisect
 import logging
 
+from elftools.common.exceptions import ELFError
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import Section, NoteSection, StringTableSection, SymbolTableSection
 from elftools.elf.relocation import RelocationSection
@@ -266,7 +267,7 @@ class ELFRemove:
         target = reloc['r_offset']
         off = next(self._elffile.address_offsets(target))
         self._f.seek(off)
-        addend = struct.unpack(self._endianness + 'I', self.fd.read(4))[0]
+        addend = struct.unpack(self._endianness + 'I', self._f.read(4))[0]
         return addend
 
     def _reloc_set_addend_REL(self, reloc, value):
@@ -286,7 +287,7 @@ class ELFRemove:
             setter_addend = self._reloc_set_addend_RELA
         else:
             ent_size = 8 # Elf32_rel struct size, x86 always rel
-            getter_addend = self._reloc.get_addend_REL
+            getter_addend = self._reloc_get_addend_REL
             setter_addend = self._reloc_set_addend_REL
 
         # Sort the relocation table by the symbol indices. This allows faster
@@ -295,7 +296,7 @@ class ELFRemove:
         orig_reloc_list = list(section.section.iter_relocations())
         relocs = [(reloc, reloc.entry['r_info_sym'], getter_addend(reloc)) \
                   for reloc in orig_reloc_list]
-        relocs = sorted(relocs, key = lambda x: (x[1], x[2]))
+        relocs = sorted(relocs, key=lambda x: (x[1], x[2]))
         sort_keys = [(x[1], x[2]) for x in relocs]
 
         # Sets for quicker lookup if we really need to iterate over the
@@ -673,7 +674,7 @@ class ELFRemove:
         func_hashes = [self._gnuhash(symbol.name) for symbol in symbol_list]
         func_buckets = [func_hash % params['nbuckets'] for func_hash in func_hashes]
         if sorted(func_buckets, reverse=True) != func_buckets:
-            raise(Exception, "bucket numbers of symbols to be deleted are not sorted!")
+            raise(Exception("bucket numbers of symbols to be deleted are not sorted!"))
 
         for idx, symbol in enumerate(symbol_list):
             logging.debug('\t%s: adjust gnu_hash_section, hash = %x bucket = %d',
@@ -800,7 +801,7 @@ class ELFRemove:
                     logging.debug('  * overwriting text segment with zeros')
                     self._f.seek(symbol_t.value)
                     self._f.write(b'\xcc' * symbol_t.size)
-            removed += 1;
+            removed += 1
             max_entrys -= 1
 
         self._change_section_size(section, removed * sh_entsize)
