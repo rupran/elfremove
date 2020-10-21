@@ -218,7 +218,7 @@ class ELFRemove:
             size_bytes = self._f.read(8)
             value = int.from_bytes(size_bytes, self._byteorder, signed=False)
             if value < size:
-                raise Exception('Size of section broken! Section: ' + section.section.name + ' Size: ' + value)
+                raise Exception('Size of section broken! Section: ' + section.section.name + ' Size: ' + str(value))
             value -= size
             self._f.seek(off_to_head + 32)
             self._f.write(value.to_bytes(8, self._byteorder))
