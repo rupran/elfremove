@@ -835,7 +835,7 @@ class ELFRemove:
     Description: removes the symbols from the given symboltable
     '''
     def collect_symbols_by_name(self, section, symbol_list, complement=False):
-        logging.debug('* searching symbols (by name) to delete in section: %s', section.section.name)
+        logging.info('* searching symbols (by name) to delete in section: %s', section.section.name)
 
         #### Search for function in Symbol Table ####
         entry_cnt = -1
@@ -845,28 +845,19 @@ class ELFRemove:
             entry_cnt += 1
             if symbol.name in self._blacklist:
                 continue
-            if complement:
-                if symbol.name not in symbol_list:
-                    size = symbol.entry['st_size']
-                    # Symbol not a function -> next
-                    if symbol['st_info']['type'] != 'STT_FUNC' or symbol['st_info']['bind'] == 'STB_WEAK' or size == 0:
-                        continue
-                    # add all symbols to remove to the return list
-                    # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
-                    found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section.version))
-            else:
-                if symbol.name in symbol_list:
-                    size = symbol.entry['st_size']
-                    # Symbol not a function -> next
-                    if symbol['st_info']['type'] != 'STT_FUNC' or symbol['st_info']['bind'] == 'STB_WEAK' or size == 0:
-                        continue
-                    # add all symbols to remove to the return list
-                    # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
-                    found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section.version))
+            if (complement and symbol.name not in symbol_list) or \
+                    (not complement and symbol.name in symbol_list):
+                size = symbol.entry['st_size']
+                # Symbol not a function -> next
+                if symbol['st_info']['type'] != 'STT_FUNC' or size == 0:
+                    continue
+                # add all symbols to remove to the return list
+                # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
+                found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section.version))
         return found_symbols
 
     def collect_symbols_by_address(self, section, address_list, complement=False):
-        logging.debug('* searching symbols (by address) to delete in section: %s', section.section.name)
+        logging.info('* searching symbols (by address) to delete in section: %s', section.section.name)
 
         #### Search for function in Symbol Table ####
         entry_cnt = -1
@@ -877,25 +868,15 @@ class ELFRemove:
             if symbol.name in self._blacklist:
                 continue
             # fix for section from dynamic segment
-            if complement:
-                if symbol.entry['st_value'] not in address_list:
-                    size = symbol.entry['st_size']
-                    # Symbol not a function -> next
-                    if symbol['st_info']['type'] != 'STT_FUNC' or symbol['st_info']['bind'] == 'STB_WEAK' or size == 0:
-                        continue
-                    # add all symbols to remove to the return list
-                    # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
-                    found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section.version))
-            else:
-                if symbol.entry['st_value'] in address_list:
-                    size = symbol.entry['st_size']
-                    # Symbol not a function -> next
-                    #if symbol['st_info']['type'] != 'STT_FUNC' or symbol['st_info']['bind'] == 'STB_WEAK' or size == 0:
-                    if symbol['st_info']['type'] != 'STT_FUNC' or size == 0: #symbol['st_info']['bind'] == 'STB_WEAK' or size == 0:
-                        continue
-                    # add all symbols to remove to the return list
-                    # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
-                    found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section.version))
+            if (complement and symbol.entry['st_value'] not in address_list) or \
+                    (not complement and symbol.entry['st_value'] in address_list):
+                size = symbol.entry['st_size']
+                # Symbol not a function -> next
+                if symbol['st_info']['type'] != 'STT_FUNC' or size == 0:
+                    continue
+                # add all symbols to remove to the return list
+                # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
+                found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section.version))
         return found_symbols
 
     '''
