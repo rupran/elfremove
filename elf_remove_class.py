@@ -390,23 +390,20 @@ class ELFRemove:
 
         # Write whole section out at once
         logging.debug(' * writing relocation section %s to file', section.section.name)
-        offset = section.section.header['sh_offset']
-
-        # Zero the section first
-        self._f.seek(offset)
-        self._f.write(b'\00' * section.section.header['sh_size'])
 
         # Write all entries out
-        self._f.seek(offset)
+        self._f.seek(section.section.header['sh_offset'])
 
+        relocs_bytes = []
         for reloc in reloc_list:
             if ent_size == 24:
-                cur_val = struct.pack(self._endianness + 'QqQ', reloc.entry['r_offset'],
-                                      reloc.entry['r_info'], reloc.entry['r_addend'])
+                relocs_bytes.append(struct.pack(self._endianness + 'QqQ', reloc.entry['r_offset'],
+                                                reloc.entry['r_info'], reloc.entry['r_addend']))
             else:
-                cur_val = struct.pack(self._endianness + 'Ii', reloc.entry['r_offset'],
-                                      reloc.entry['r_info'])
-            self._f.write(cur_val)
+                relocs_bytes.append(struct.pack(self._endianness + 'Ii', reloc.entry['r_offset'],
+                                                reloc.entry['r_info']))
+        # Write new entris and zero the remainder of the old section
+        self._f.write(b''.join(relocs_bytes) + (ent_size * removed) * b'\00')
 
         # Change the size in the section header
         self._change_section_size(section, ent_size * removed)
@@ -502,13 +499,12 @@ class ELFRemove:
         for symbol in symbol_list:
             versions.pop(symbol.count)
 
-        # Build and write the new versions section
+        # Build and write the new versions section, zero out rest of the section
         fmt_str = self._endianness + str(len(versions)) + 'H'
         new_section_bytes = struct.pack(fmt_str, *versions)
         self._f.seek(self._gnu_version.section.header['sh_offset'])
-        self._f.write(new_section_bytes)
-        # Zero out rest of the section
-        self._f.write(b'\00' * ((orig_dynsym_size - len(versions)) * ent_size))
+        self._f.write(new_section_bytes + \
+                      b'\00' * ((orig_dynsym_size - len(versions)) * ent_size))
 
         self._change_section_size(self._gnu_version, ent_size * len(symbol_list))
 
@@ -699,12 +695,10 @@ class ELFRemove:
         self._f.seek(bucket_start)
         buckets_bytes = struct.pack(self._endianness + str(params['nbuckets']) + 'I', *params['buckets'])
         self._f.write(buckets_bytes)
-        # We're automatically at chain_start here, so zero the old chains array
-        # and write the new contents
-        self._f.write(nchains * b'\00' * 4)
-        self._f.seek(chain_start)
+        # We're automatically at chain_start here, so write the new chains
+        # array and zero the remaining old contents
         chains_bytes = struct.pack(self._endianness + str(len(params['chains'])) + 'I', *params['chains'])
-        self._f.write(chains_bytes)
+        self._f.write(chains_bytes + (nchains - len(params['chains'])) * 4 * b'\00')
 
         self._change_section_size(self._gnu_hash, len(symbol_list) * 4)
 
