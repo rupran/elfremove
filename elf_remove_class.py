@@ -770,36 +770,42 @@ class ELFRemove:
 
         removed = 0
         sh_offset = section.section.header['sh_offset']
+        sh_size = section.section.header['sh_size']
         sh_entsize = section.section.header['sh_entsize']
-        max_entrys = (section.section.header['sh_size'] // sh_entsize)
+        max_entrys = (sh_size // sh_entsize)
         original_num_entries = max_entrys
+
+        if section.index != -1:
+            self._f.seek(sh_offset)
+            section_bytes = self._f.read(sh_size)
+            section_entries = [section_bytes[i:i+sh_entsize] for i in range(0, len(section_bytes),
+                                                                            sh_entsize)]
+        else:
+            section_entries = []
 
         for symbol_t in sorted_list:
             # check if section was changed between the collection and removal of Symbols
             if symbol_t.sec_version != section.version:
                 raise Exception('symbol_collection was generated for older revision of ' + section.section.name)
-            #### Overwrite Symbol Table entry ####
+            #### Delete Symbol Table entry ####
             logging.debug(' * %s: deleting table entry', symbol_t.name)
-
-            # Only write to file if the section is actually part of the file
             if section.index != -1:
-                # push up all entrys
-                self._f.seek(sh_offset + ((symbol_t.count + 1) * sh_entsize))
-                read_bytes = self._f.read((max_entrys - symbol_t.count - 1) * sh_entsize)
-                self._f.seek(sh_offset + (symbol_t.count * sh_entsize))
-                self._f.write(read_bytes)
-
-                # last entry -> set to 0x0
-                self._f.write(sh_entsize * chr(0x0).encode('ascii'))
+                section_entries.pop(symbol_t.count)
 
             #### Overwrite function with zeros ####
-            if overwrite:
+            if overwrite and section.index != -1:
                 if symbol_t.value != 0 and symbol_t.size != 0:
                     logging.debug('  * overwriting text segment with zeros')
                     self._f.seek(symbol_t.value)
                     self._f.write(b'\xcc' * symbol_t.size)
             removed += 1
             max_entrys -= 1
+
+        # Only write to file if the section is actually part of the file
+        if section.index != -1:
+            # Write new symbol table and zero out the rest of the old contents
+            self._f.seek(sh_offset)
+            self._f.write(b''.join(section_entries) + (sh_entsize * removed) * b'\00')
 
         self._change_section_size(section, removed * sh_entsize)
         section = SectionWrapper(section.section, section.index, section.version + 1)
