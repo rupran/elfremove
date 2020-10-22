@@ -152,7 +152,10 @@ class ELFRemove:
                     # try to build symtab section from dynamic segment information
                     size = seg.num_symbols() * seg.elfstructs.Elf_Sym.sizeof()
                     _, offset = seg.get_table_offset('DT_SYMTAB')
-                    self.dynsym = SectionWrapper(self._build_symtab_section('.dynsym', offset, size, seg.elfstructs.Elf_Sym.sizeof(), seg._get_stringtable()), -1, 0)
+                    self.dynsym = SectionWrapper(self._build_symtab_section('.dynsym', offset, size,
+                                                                            seg.elfstructs.Elf_Sym.sizeof(),
+                                                                            seg._get_stringtable()),
+                                                 -1, 0)
                     logging.debug('* Found \'DYNSYM\' section!')
 
                     # search for all supported sections and build section object with needed entries
@@ -236,7 +239,8 @@ class ELFRemove:
             size_bytes = self._f.read(8)
             value = int.from_bytes(size_bytes, self._byteorder, signed=False)
             if value < size:
-                raise Exception('Size of section broken! Section: ' + section.section.name + ' Size: ' + str(value))
+                raise Exception('Size of section broken! Section: {}'.format(section.section.name)
+                                + ' Size: {}'.format(value))
             value -= size
             self._f.seek(off_to_head + 32)
             self._f.write(value.to_bytes(8, self._byteorder))
@@ -606,11 +610,13 @@ class ELFRemove:
         self._f.write(params['nchains'].to_bytes(4, self._byteorder))
 
         # - buckets
-        out = b''.join(params['buckets'][i].to_bytes(4, self._byteorder) for i in range(0, params['nbuckets']))
+        out = b''.join(params['buckets'][i].to_bytes(4, self._byteorder) \
+                       for i in range(0, params['nbuckets']))
         self._f.write(out)
 
         # - chains
-        out = b''.join(params['chains'][i].to_bytes(4, self._byteorder) for i in range(0, params['nchains']))
+        out = b''.join(params['chains'][i].to_bytes(4, self._byteorder) \
+                       for i in range(0, params['nchains']))
         self._f.write(out)
 
         self._change_section_size(self._elf_hash, len(symbol_list) * 4)
@@ -626,7 +632,8 @@ class ELFRemove:
     def _edit_elf_hashtable(self, symbol_name, dynsym_nr, params):
         func_hash = self._elfhash(symbol_name)
         bucket_nr = func_hash % params['nbuckets']
-        logging.debug('\t%s: adjust hash_section, hash = %x bucket = %d', symbol_name, func_hash, bucket_nr)
+        logging.debug('\t%s: adjust hash_section, hash = %x bucket = %d',
+                      symbol_name, func_hash, bucket_nr)
 
         # find symbol and remove entry from chain
         cur_ptr = params['buckets'][bucket_nr]
@@ -643,7 +650,8 @@ class ELFRemove:
                     params['chains'][prev_ptr] = params['chains'][cur_ptr]
                     break
                 if cur_ptr == 0:
-                    raise Exception("Entry \'" + symbol_name + "\' not found in Hash Table! Hash Table is broken!")
+                    raise Exception("Entry \'{}\' not found in Hash Table!".format(symbol_name) +
+                                    "Hash Table is broken!")
 
         # delete entry and change pointer in list
         for i in range(dynsym_nr, (params['nchains'] - 1)):
@@ -665,16 +673,15 @@ class ELFRemove:
         if self._gnu_hash is None:
             return
 
-        sect = GNUHashTable(self._elffile,
-                            self._gnu_hash.section.header['sh_offset'],
-                            self.dynsym.section)
+        sh_offset = self._gnu_hash.section.header['sh_offset']
+        sect = GNUHashTable(self._elffile, sh_offset, self.dynsym.section)
         params = {'nbuckets': sect.params['nbuckets'],
                   'symoffset': sect.params['symoffset'],
                   'bloom_size': sect.params['bloom_size'],
                   'bloom_entry_size': 4 if self._elffile.header['e_machine'] == 'EM_386' else 8,
                   'buckets': list(sect.params['buckets'])}
 
-        bucket_start = self._gnu_hash.section['sh_offset'] + 4 * 4 + params['bloom_size'] * params['bloom_entry_size']
+        bucket_start = sh_offset + 4 * 4 + params['bloom_size'] * params['bloom_entry_size']
         chain_start = bucket_start + 4 * params['nbuckets']
 
         self._f.seek(chain_start)
@@ -711,11 +718,13 @@ class ELFRemove:
 
         # Write out buckets
         self._f.seek(bucket_start)
-        buckets_bytes = struct.pack(self._endianness + str(params['nbuckets']) + 'I', *params['buckets'])
+        buckets_bytes = struct.pack(self._endianness + str(params['nbuckets']) + 'I',
+                                    *params['buckets'])
         self._f.write(buckets_bytes)
         # We're automatically at chain_start here, so write the new chains
         # array and zero the remaining old contents
-        chains_bytes = struct.pack(self._endianness + str(len(params['chains'])) + 'I', *params['chains'])
+        chains_bytes = struct.pack(self._endianness + str(len(params['chains'])) + 'I',
+                                   *params['chains'])
         self._f.write(chains_bytes + (nchains - len(params['chains'])) * 4 * b'\00')
 
         self._change_section_size(self._gnu_hash, len(symbol_list) * 4)
@@ -744,12 +753,12 @@ class ELFRemove:
         # check hash
         sym_nr = dynsym_nr - params['symoffset']
         if sym_nr < 0:
-            raise Exception('Function index out of bounds for gnu_hash_section! Index: ' + str(sym_nr))
+            raise Exception('Function index out of bounds for gnu_hash_section! Index: {}'.format(sym_nr))
 
         bucket_hash = params['chains'][sym_nr]
         # if this happens, sth on the library or hash function is broken!
         if (bucket_hash & ~0x1) != (func_hash & ~0x1):
-            raise Exception('calculated hash: ' + str(hex(func_hash)) + ' read hash: ' + str(hex(bucket_hash)))
+            raise Exception('calculated hash: {x}, read hash: {x}'.format(func_hash, bucket_hash))
 
         # copy all entrys afterwards up by one
         params['chains'].pop(sym_nr)
@@ -798,7 +807,8 @@ class ELFRemove:
         for symbol_t in sorted_list:
             # check if section was changed between the collection and removal of Symbols
             if symbol_t.sec_version != section.version:
-                raise Exception('symbol_collection was generated for older revision of ' + section.section.name)
+                raise Exception('symbol_collection was generated for older revision of ' \
+                                + section.section.name)
             #### Delete Symbol Table entry ####
             logging.debug(' * %s: deleting table entry', symbol_t.name)
             if section.index != -1:
@@ -853,7 +863,8 @@ class ELFRemove:
     Description: removes the symbols from the given symboltable
     '''
     def collect_symbols_by_name(self, section, symbol_list, complement=False):
-        logging.info('* searching symbols (by name) to delete in section: %s', section.section.name)
+        logging.info('* searching symbols (by name) to delete in section: %s',
+                     section.section.name)
 
         #### Search for function in Symbol Table ####
         entry_cnt = -1
@@ -871,7 +882,9 @@ class ELFRemove:
                     continue
                 # add all symbols to remove to the return list
                 # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
-                found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section.version))
+                found_symbols.append(SymbolWrapper(symbol.name, entry_cnt,
+                                                   symbol.entry['st_value'],
+                                                   symbol.entry['st_size'], section.version))
         return found_symbols
 
     def collect_symbols_by_address(self, section, address_list, complement=False):
@@ -894,7 +907,9 @@ class ELFRemove:
                     continue
                 # add all symbols to remove to the return list
                 # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
-                found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol.entry['st_value'], symbol.entry['st_size'], section.version))
+                found_symbols.append(SymbolWrapper(symbol.name, entry_cnt,
+                                                   symbol.entry['st_value'],
+                                                   symbol.entry['st_size'], section.version))
         return found_symbols
 
     '''
