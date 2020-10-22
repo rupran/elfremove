@@ -1,6 +1,23 @@
 #!/usr/bin/python3
 
-from elf_remove_class import ELFRemove
+# Copyright 2018-2019, Julian Geus <julian.geus@fau.de>
+# Copyright 2018-2020, Andreas Ziegler <andreas.ziegler@fau.de>
+#
+# This file is part of ELFRemove.
+#
+# ELFRemove is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# ELFRemove is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with ELFRemove.  If not, see <http://www.gnu.org/licenses/>.
+
 import sys
 import os
 import subprocess
@@ -11,6 +28,7 @@ from shutil import copyfile
 
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), '../librarytrader'))
 from librarytrader.librarystore import LibraryStore
+from elf_remove_class import ELFRemove
 
 parser = argparse.ArgumentParser(description='Removes unneccessary symbols on a copy of given library and tests the given command for SIGSEGV after every symbol removal.')
 parser.add_argument('json', help='the json file from libtrader')
