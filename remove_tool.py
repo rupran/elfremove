@@ -19,7 +19,7 @@
 # along with ELFRemove.  If not, see <http://www.gnu.org/licenses/>.
 
 import sys
-from elf_remove_class import ELFRemove
+from elfremove.elfremove import ELFRemove
 
 def proc(filename, functions):
     elf_rem = ELFRemove(filename)

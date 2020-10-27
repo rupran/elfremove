@@ -27,7 +27,7 @@ import logging
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), '../librarytrader'))
 
 from librarytrader.librarystore import LibraryStore
-from elf_remove_class import ELFRemove
+from elfremove.elfremove import ELFRemove
 
 parser = argparse.ArgumentParser(description='Remove unneccessary symbols of given librarys.')
 parser.add_argument('json', help='the json file from libtrader')
