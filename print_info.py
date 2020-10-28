@@ -33,7 +33,7 @@ parser.add_argument('json', help='the json file from libtrader')
 parser.add_argument('-l', '--local', action="store_true", help='remove local functions')
 parser.add_argument('--lib', nargs='*', help='list of librarys to be processed, use all librarys from json file if not defined')
 parser.add_argument('--libonly', action="store_true", help='name of binary has to start with \'lib\'')
-parser.add_argument('--addr_list', action="store_true", help='print list of addresses with size')
+parser.add_argument('--addr_list', action="store_true", help='print list of removed locations (addresses) with size')
 parser.add_argument('--func_list', action="store_true", help='print list of functions')
 
 def log(mes):

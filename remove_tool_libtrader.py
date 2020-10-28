@@ -35,7 +35,7 @@ parser.add_argument('-l', '--local', action="store_true", help='remove local fun
 parser.add_argument('--lib', nargs='*', help='list of librarys to be processed, use all librarys from json file if not defined')
 parser.add_argument('--libonly', action="store_true", help='name of binary has to start with \'lib\'')
 parser.add_argument('--overwrite', action="store_true", help='overwrite original library files, otherwise work with a copy in the current working directory')
-parser.add_argument('--addr_list', action="store_true", help='print list of addresses with size')
+parser.add_argument('--addr_list', action="store_true", help='print list of removed locations (addresses) with size')
 parser.add_argument('-v', '--verbose', action="store_true", help='set verbosity')
 parser.add_argument('--debug', action="store_true", help=argparse.SUPPRESS)
 
