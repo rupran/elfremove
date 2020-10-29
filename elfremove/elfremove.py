@@ -40,9 +40,9 @@ class SectionWrapper:
 
 class SymbolWrapper:
 
-    def __init__(self, name, count, value, size, sec_version):
+    def __init__(self, name, index, value, size, sec_version):
         self.name = name
-        self.count = count
+        self.index = index
         self.value = value
         self.size = size
         self.sec_version = sec_version
@@ -332,13 +332,13 @@ class ELFRemove:
             if symbol.value not in sym_addrs:
                 if is_symtab:
                     continue
-                if symbol.count not in sym_nrs:
+                if symbol.index not in sym_nrs:
                     continue
-            removed += self._edit_rel_sect(reloc_list, sort_keys, symbol.count,
+            removed += self._edit_rel_sect(reloc_list, sort_keys, symbol.index,
                                            symbol.value, getter_addend,
                                            setter_addend, push, is_symtab)
             if not is_symtab:
-                sym_nrs.discard(symbol.count)
+                sym_nrs.discard(symbol.index)
             sym_addrs.discard(symbol.value)
 
         # For all removed symbols, we need to fix up the symbol table indices
@@ -373,7 +373,7 @@ class ELFRemove:
                 # lower index than the currently looked at symbol, we need to
                 # 'skip over' the removed symbol and account for it in the
                 # number subtracted from the following relocations
-                elif r_info_sym <= cur_symbol.count:
+                elif r_info_sym <= cur_symbol.index:
                     num_earlier_removed_symbols -= 1
                     # There are no earlier symbols left, we're done
                     if num_earlier_removed_symbols == 0:
@@ -519,7 +519,7 @@ class ELFRemove:
         versions = list(struct.unpack(fmt_str, section_bytes))
 
         for symbol in symbol_list:
-            versions.pop(symbol.count)
+            versions.pop(symbol.index)
 
         # Build and write the new versions section, zero out rest of the section
         fmt_str = self._endianness + str(len(versions)) + 'H'
@@ -595,7 +595,7 @@ class ELFRemove:
                   'chains': sect.params['chains']}
 
         for symbol in symbol_list:
-            self._edit_elf_hashtable(symbol.name, symbol.count, params)
+            self._edit_elf_hashtable(symbol.name, symbol.index, params)
 
         # Zero out old hash table
         self._f.seek(self._elf_hash.section.header['sh_offset'])
@@ -697,7 +697,7 @@ class ELFRemove:
         for idx, symbol in enumerate(symbol_list):
             logging.debug('\t%s: adjust gnu_hash_section, hash = %x bucket = %d',
                           symbol.name, func_hashes[idx], func_buckets[idx])
-            self._edit_gnu_hashtable(symbol.count, func_hashes[idx], params)
+            self._edit_gnu_hashtable(symbol.index, func_hashes[idx], params)
 
         # Fix bucket indices accounting for deleted symbols. Start from the
         # back as symbols (and therefore also their buckets) are sorted in
@@ -787,7 +787,7 @@ class ELFRemove:
         logging.info('* removing symbols from symbol table (%s)', section.section.name)
         # sort list by offset in symbol table
         # otherwise the index would be wrong after one Element was removed
-        sorted_list = sorted(collection, reverse=True, key=lambda x: x.count)
+        sorted_list = sorted(collection, reverse=True, key=lambda x: x.index)
 
         removed = 0
         sh_offset = section.section.header['sh_offset']
@@ -812,7 +812,7 @@ class ELFRemove:
             #### Delete Symbol Table entry ####
             logging.debug(' * %s: deleting table entry', symbol_t.name)
             if section.index != -1:
-                section_entries.pop(symbol_t.count)
+                section_entries.pop(symbol_t.index)
 
             #### Overwrite function with zeros ####
             if overwrite and section.index != -1:
@@ -958,7 +958,7 @@ class ELFRemove:
             print(line.format("Name", "Offset", "StartAddr", "Size", "Rev."))
             print((maxlen + 40) * '-')
             for sym in collection:
-                print(line.format(sym.name, sym.count, sym.value, hex(sym.size), sym.sec_version))
+                print(line.format(sym.name, sym.index, sym.value, hex(sym.size), sym.sec_version))
         else:
             size_of_text = 0
             for section in self._elffile.iter_sections():
