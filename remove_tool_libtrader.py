@@ -145,6 +145,17 @@ def proc():
         if(elf_rem.symtab != None):
             collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab, elf_rem.get_collection_names(collection_dynsym))
 
+        # Fix sizes to remove nop-only gaps
+        ranges = store[lib.fullname].ranges
+        for symbol in collection_dynsym:
+            if symbol.value in ranges and ranges[symbol.value] != symbol.size:
+                new_size = ranges[symbol.value]
+                logging.debug('fix size for %s:%x: %d->%d', lib.fullname,
+                                                            symbol.value,
+                                                            symbol.size,
+                                                            new_size)
+                symbol.size = new_size
+
         # display statistics
         elf_rem.print_collection_info(collection_dynsym, args.debug, local)
 
