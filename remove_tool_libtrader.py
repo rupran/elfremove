@@ -133,7 +133,7 @@ def proc():
                     continue
                 if(key not in blacklist):
                     value = store[lib.fullname].local_users.get(key, [])
-                    if(not value):
+                    if(not value and store[lib.fullname].ranges[key] > 0):
                         local.add((key, store[lib.fullname].ranges[key]))
                 else:
                     print("Local in blacklist: " + str(key))

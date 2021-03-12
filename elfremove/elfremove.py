@@ -215,8 +215,9 @@ class ELFRemove:
 
     def _build_header(self, off, size, entsize, name, shtype):
         # build own header
-        header = {'sh_name': name, 'sh_type': shtype, 'sh_flags': 0, 'sh_addr': 0, 'sh_offset': off
-            , 'sh_size': size, 'sh_link': 0, 'sh_info': 0, 'sh_addralign': 0, 'sh_entsize': entsize}
+        header = {'sh_name': name, 'sh_type': shtype, 'sh_flags': 0,
+                  'sh_addr': 0, 'sh_offset': off, 'sh_size': size, 'sh_link': 0,
+                  'sh_info': 0, 'sh_addralign': 0, 'sh_entsize': entsize}
 
         return header
 
@@ -365,7 +366,7 @@ class ELFRemove:
                 r_info_sym = reloc.entry['r_info_sym']
                 # If we are working on a relocation section with no
                 # intentionally zeroed entries and we have reached the
-                # relocationswithout symbol indices, we're done.
+                # relocations without symbol indices, we're done.
                 if r_info_sym == 0:
                     if push:
                         break
@@ -436,7 +437,7 @@ class ELFRemove:
 
         # Shrink the number of relocation entries in the DYNAMIC segment
         self._shrink_dynamic_tag('DT_RELASZ', ent_size * removed)
-        logging.debug(' * done!')
+        logging.debug(' * done, removed %d relocations!', removed)
 
     '''
     Function:   _edit_rel_sect
@@ -758,7 +759,7 @@ class ELFRemove:
         bucket_hash = params['chains'][sym_nr]
         # if this happens, sth on the library or hash function is broken!
         if (bucket_hash & ~0x1) != (func_hash & ~0x1):
-            raise Exception('calculated hash: {x}, read hash: {x}'.format(func_hash, bucket_hash))
+            raise Exception('calculated hash: {:x}, read hash: {:x}'.format(func_hash, bucket_hash))
 
         # copy all entrys afterwards up by one
         params['chains'].pop(sym_nr)
@@ -836,7 +837,7 @@ class ELFRemove:
         # this so far.
         logging.info('* adapting dynamic relocation entries')
         self._batch_remove_relocs(sorted_list, self._rel_dyn, push=True,
-                                  is_symtab=(section.section.name=='.symtab'))
+                                  is_symtab=(section.section.name == '.symtab'))
         if section.section.name == '.dynsym':
             self.dynsym = section
             logging.info('* adapting PLT relocation entries')
@@ -876,15 +877,17 @@ class ELFRemove:
                 continue
             if (complement and symbol.name not in symbol_list) or \
                     (not complement and symbol.name in symbol_list):
+                start_address = symbol.entry['st_value']
                 size = symbol.entry['st_size']
+
                 # Symbol not a function -> next
                 if symbol['st_info']['type'] != 'STT_FUNC' or size == 0:
                     continue
                 # add all symbols to remove to the return list
                 # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
                 found_symbols.append(SymbolWrapper(symbol.name, entry_cnt,
-                                                   symbol.entry['st_value'],
-                                                   symbol.entry['st_size'], section.version))
+                                                   start_address, size,
+                                                   section.version))
         return found_symbols
 
     def collect_symbols_by_address(self, section, address_list, complement=False):
@@ -899,8 +902,9 @@ class ELFRemove:
             if symbol.name in self._blacklist:
                 continue
             # fix for section from dynamic segment
-            if (complement and symbol.entry['st_value'] not in address_list) or \
-                    (not complement and symbol.entry['st_value'] in address_list):
+            start_address = symbol.entry['st_value']
+            if (complement and start_address not in address_list) or \
+                    (not complement and start_address in address_list):
                 size = symbol.entry['st_size']
                 # Symbol not a function -> next
                 if symbol['st_info']['type'] != 'STT_FUNC' or size == 0:
@@ -908,8 +912,8 @@ class ELFRemove:
                 # add all symbols to remove to the return list
                 # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
                 found_symbols.append(SymbolWrapper(symbol.name, entry_cnt,
-                                                   symbol.entry['st_value'],
-                                                   symbol.entry['st_size'], section.version))
+                                                   start_address, size,
+                                                   section.version))
         return found_symbols
 
     '''
@@ -921,6 +925,8 @@ class ELFRemove:
     def overwrite_local_functions(self, func_tuple_list):
         logging.debug('* overwriting local functions')
         for start, size in func_tuple_list:
+            if size == 0:
+                continue
             #### Overwrite function with null bytes ####
             logging.debug('  * %x: overwriting text segment of local function', start)
             self._f.seek(start)

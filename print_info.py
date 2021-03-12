@@ -22,6 +22,7 @@ import sys
 import os
 import argparse
 from shutil import copyfile
+import logging
 
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), '../librarytrader'))
 
@@ -35,10 +36,7 @@ parser.add_argument('--lib', nargs='*', help='list of librarys to be processed, 
 parser.add_argument('--libonly', action="store_true", help='name of binary has to start with \'lib\'')
 parser.add_argument('--addr_list', action="store_true", help='print list of removed locations (addresses) with size')
 parser.add_argument('--func_list', action="store_true", help='print list of functions')
-
-def log(mes):
-    if(args.verbose):
-        print(mes)
+parser.add_argument('--debug', action="store_true", help=argparse.SUPPRESS)
 
 def proc():
 
@@ -121,4 +119,10 @@ def proc():
 
 if __name__ == '__main__':
     args = parser.parse_args()
+    if args.debug:
+        loglevel = logging.DEBUG
+    else:
+        loglevel = logging.WARNING
+    logging.basicConfig(level=loglevel)
+
     proc()
