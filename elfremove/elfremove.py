@@ -30,6 +30,7 @@ from elftools.elf.sections import Section, SymbolTableSection
 from elftools.elf.relocation import RelocationSection
 from elftools.elf.dynamic import DynamicSegment
 from elftools.elf.hash import ELFHashTable, GNUHashTable
+from elftools.elf.enums import ENUM_RELOC_TYPE_x64, ENUM_RELOC_TYPE_i386
 
 class SectionWrapper:
 
@@ -258,24 +259,26 @@ class ELFRemove:
             self._f.write(value.to_bytes(4, self._byteorder))
             section.section.header['sh_size'] = value
 
-
-    def _shrink_dynamic_tag(self, target_tag, amount):
+    def _write_dynamic_tag(self, target_tag, value, subtract_from_orig=False):
         dynamic_section = self._dynamic.section
-        relasz = [idx for idx, tag in enumerate(dynamic_section.iter_tags()) if tag['d_tag'] == target_tag]
-        if not relasz:
+        found_tag = [idx for idx, tag in enumerate(dynamic_section.iter_tags()) if tag['d_tag'] == target_tag]
+        if not found_tag:
             return
-        f_off = dynamic_section._offset + relasz[0] * dynamic_section._tagsize
+        f_off = dynamic_section._offset + found_tag[0] * dynamic_section._tagsize
         self._f.seek(f_off)
-        val = self._f.read(dynamic_section._tagsize)
+        raw_val = self._f.read(dynamic_section._tagsize)
         if dynamic_section._tagsize == 8:
             struct_string = self._endianness + 'iI'
         else:
             struct_string = self._endianness + 'qQ'
-        tagno, sz = struct.unpack(struct_string, val)
-        new_val = struct.pack(struct_string, tagno, sz - amount)
+        tagno, old_val = struct.unpack(struct_string, raw_val)
+        new_val = old_val - value if subtract_from_orig else value
+        new_raw_val = struct.pack(struct_string, tagno, new_val)
         self._f.seek(f_off)
-        self._f.write(new_val)
+        self._f.write(new_raw_val)
 
+    def _shrink_dynamic_tag(self, target_tag, amount):
+        return self._write_dynamic_tag(target_tag, amount, subtract_from_orig=True)
 
     def _reloc_get_addend_RELA(self, reloc):
         return reloc.entry['r_addend']
@@ -435,8 +438,20 @@ class ELFRemove:
         # _size to calculate the number
         section.section._size -= (ent_size * removed)
 
-        # Shrink the number of relocation entries in the DYNAMIC segment
-        self._shrink_dynamic_tag('DT_RELASZ', ent_size * removed)
+        if push:
+            # Shrink the total number of relocation entries and (optionally)
+            # the number of R_XX_RELATIVE relocations in the DYNAMIC segment
+            if section.section.is_RELA():
+                self._shrink_dynamic_tag('DT_RELASZ', ent_size * removed)
+                relacount = len([reloc for reloc in reloc_list \
+                                if reloc['r_info_type'] == ENUM_RELOC_TYPE_x64['R_X86_64_RELATIVE']])
+                self._write_dynamic_tag('DT_RELACOUNT', relacount)
+            else:
+                self._shrink_dynamic_tag('DT_RELSZ', ent_size * removed)
+                relcount = len([reloc for reloc in reloc_list \
+                                if reloc['r_info_type'] == ENUM_RELOC_TYPE_i386['R_386_RELATIVE']])
+                self._write_dynamic_tag('DT_RELCOUNT', relcount)
+
         logging.debug(' * done, removed %d relocations!', removed)
 
     '''
