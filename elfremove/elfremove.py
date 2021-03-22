@@ -364,7 +364,7 @@ class ELFRemove:
             num_earlier_removed_symbols = len(symbol_list)
             # The relocation list is sorted from low to high symbol indices so
             # we need to start at the back.
-            while cur_reloc_idx > 0:
+            while cur_reloc_idx >= 0:
                 reloc = reloc_list[cur_reloc_idx]
                 r_info_sym = reloc.entry['r_info_sym']
                 # If we are working on a relocation section with no
