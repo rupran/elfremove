@@ -113,6 +113,11 @@ class ELFRemove:
             DEBUG_DIR = os.path.join(os.sep, 'usr', 'lib', 'debug', 'lib', _arch_dir)
             BUILDID_DIR = os.path.join(os.sep, 'usr', 'lib', 'debug', '.build-id')
             paths = [os.path.join(DEBUG_DIR, os.path.basename(filename))]
+            external_debug_dir = os.environ.get('EXTERNAL_DEBUG_DIR', '')
+            if external_debug_dir:
+                for debug_path in external_debug_dir.split(':'):
+                    paths.insert(0, os.path.join(debug_path, os.path.basename(filename)))
+                    paths.insert(1, os.path.join(debug_path, os.path.basename(filename) + '.debug'))
             id_section = self._elffile.get_section_by_name('.note.gnu.build-id')
             if not id_section:
                 logging.debug('search for external symtab: no id_section')
@@ -125,6 +130,11 @@ class ELFRemove:
                 paths.insert(0, os.path.join(BUILDID_DIR,
                                              build_id[:2],
                                              build_id[2:] + '.debug'))
+                external_buildid_dir = os.environ.get('EXTERNAL_BUILDID_DIR', '')
+                if external_buildid_dir:
+                    paths.insert(0, os.path.join(external_buildid_dir,
+                                                 build_id[:2],
+                                                 build_id[2:] + '.debug'))
             for path in paths:
                 if not os.path.isfile(path):
                     logging.debug('search for external symtab: no path %s', path)
