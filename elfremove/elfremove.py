@@ -30,7 +30,7 @@ from elftools.elf.sections import Section, SymbolTableSection
 from elftools.elf.relocation import RelocationSection
 from elftools.elf.dynamic import DynamicSegment
 from elftools.elf.hash import ELFHashTable, GNUHashTable
-from elftools.elf.enums import ENUM_RELOC_TYPE_x64, ENUM_RELOC_TYPE_i386
+from elftools.elf.enums import ENUM_RELOC_TYPE_x64, ENUM_RELOC_TYPE_i386, ENUM_DT_FLAGS
 
 class SectionWrapper:
 
@@ -106,6 +106,28 @@ class ELFRemove:
                 logging.debug('* Found \'DYNAMIC\' section!')
                 self._dynamic = SectionWrapper(sect, section_no, 0)
             section_no += 1
+
+        # Special case for wrong loader behaviour before glibc 2.23. Due to a
+        # bug, the .rela.dyn and .rela.plt sections have to be continuous when
+        # BIND_NOW is set or PLT relocations might remain unprocessed.
+        self._need_continuous_relocations = False
+        if self._dynamic:
+            flags = list(self._dynamic.section.iter_tags('DT_FLAGS'))
+            if flags and int(flags[0].entry.d_val & ENUM_DT_FLAGS['DF_BIND_NOW']):
+                # BIND_NOW, maybe check .note.ABI-tag
+                id_section = self._elffile.get_section_by_name('.note.ABI-tag')
+                if id_section:
+                    for note in id_section.iter_notes():
+                        if note['n_type'] != 'NT_GNU_ABI_TAG':
+                            continue
+                        abi_tag = note['n_desc']
+                        if abi_tag['abi_os'] == 'ELF_NOTE_OS_LINUX' and \
+                                (abi_tag['abi_major'],
+                                 abi_tag['abi_minor'],
+                                 abi_tag['abi_tiny']) == (2, 6, 32):
+                            logging.debug(' * detected old ABI version and BIND_NOW,'\
+                                          ' keeping relocations continuous...')
+                            self._need_continuous_relocations = True
 
         if not self.symtab:
             _arch_dir = 'x86_64-linux-gnu' if self._elffile.header['e_machine'] == 'EM_X86_64' \
@@ -438,26 +460,38 @@ class ELFRemove:
             else:
                 relocs_bytes.append(struct.pack(self._endianness + 'Ii', reloc.entry['r_offset'],
                                                 reloc.entry['r_info']))
-        # Write new entris and zero the remainder of the old section
-        self._f.write(b''.join(relocs_bytes) + (ent_size * removed) * b'\00')
+
+        # Write new entries and zero the remainder of the old section. If we
+        # need to keep the relocation section size constant but still push
+        # entries forward, repeat the last relocation to fill the section.
+        if self._need_continuous_relocations:
+            last_reloc = relocs_bytes[-1]
+            fill_bytes = removed * last_reloc
+        else:
+            fill_bytes = (ent_size * removed) * b'\00'
+        self._f.write(b''.join(relocs_bytes) + fill_bytes)
 
         # Change the size in the section header
-        self._change_section_size(section, ent_size * removed)
+        if not self._need_continuous_relocations:
+            self._change_section_size(section, ent_size * removed)
         # the following is needed in order to lower the number of relocations
         # returned via iter_relocations() -> uses num_relocations() -> uses
         # _size to calculate the number
-        section.section._size -= (ent_size * removed)
+        if not self._need_continuous_relocations:
+            section.section._size -= (ent_size * removed)
 
         if push:
             # Shrink the total number of relocation entries and (optionally)
             # the number of R_XX_RELATIVE relocations in the DYNAMIC segment
             if section.section.is_RELA():
-                self._shrink_dynamic_tag('DT_RELASZ', ent_size * removed)
+                if not self._need_continuous_relocations:
+                    self._shrink_dynamic_tag('DT_RELASZ', ent_size * removed)
                 relacount = len([reloc for reloc in reloc_list \
                                 if reloc['r_info_type'] == ENUM_RELOC_TYPE_x64['R_X86_64_RELATIVE']])
                 self._write_dynamic_tag('DT_RELACOUNT', relacount)
             else:
-                self._shrink_dynamic_tag('DT_RELSZ', ent_size * removed)
+                if not self._need_continuous_relocations:
+                    self._shrink_dynamic_tag('DT_RELSZ', ent_size * removed)
                 relcount = len([reloc for reloc in reloc_list \
                                 if reloc['r_info_type'] == ENUM_RELOC_TYPE_i386['R_386_RELATIVE']])
                 self._write_dynamic_tag('DT_RELCOUNT', relcount)
