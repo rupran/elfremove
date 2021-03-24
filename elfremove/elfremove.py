@@ -111,7 +111,9 @@ class ELFRemove:
         # bug, the .rela.dyn and .rela.plt sections have to be continuous when
         # BIND_NOW is set or PLT relocations might remain unprocessed.
         self._need_continuous_relocations = False
-        if self._dynamic:
+        if os.environ.get('LD_BUGGY', ''):
+            self._need_continuous_relocations = True
+        elif self._dynamic:
             flags = list(self._dynamic.section.iter_tags('DT_FLAGS'))
             if flags and int(flags[0].entry.d_val & ENUM_DT_FLAGS['DF_BIND_NOW']):
                 # BIND_NOW, maybe check .note.ABI-tag
@@ -125,9 +127,10 @@ class ELFRemove:
                                 (abi_tag['abi_major'],
                                  abi_tag['abi_minor'],
                                  abi_tag['abi_tiny']) == (2, 6, 32):
-                            logging.debug(' * detected old ABI version and BIND_NOW,'\
-                                          ' keeping relocations continuous...')
                             self._need_continuous_relocations = True
+        if self._need_continuous_relocations:
+            logging.debug(' * detected old ABI version and BIND_NOW,'\
+                            ' keeping relocations continuous...')
 
         if not self.symtab:
             _arch_dir = 'x86_64-linux-gnu' if self._elffile.header['e_machine'] == 'EM_X86_64' \
