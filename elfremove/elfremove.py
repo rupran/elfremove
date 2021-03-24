@@ -116,7 +116,7 @@ class ELFRemove:
             flags = list(self._dynamic.section.iter_tags('DT_FLAGS'))
             flags_1 = list(self._dynamic.section.iter_tags('DT_FLAGS_1'))
             bind_now = list(self._dynamic.section.iter_tags('DT_BIND_NOW'))
-            if flags and flags[0].entry.d_val) & ENUM_DT_FLAGS['DF_BIND_NOW'] or \
+            if flags and flags[0].entry.d_val & ENUM_DT_FLAGS['DF_BIND_NOW'] or \
                     flags_1 and flags_1[0].entry.d_val & ENUM_DT_FLAGS_1['DF_1_NOW'] or \
                     bind_now:
                 # BIND_NOW, check environment variable or .note.ABI-tag
@@ -131,8 +131,8 @@ class ELFRemove:
                             abi_tag = note['n_desc']
                             if abi_tag['abi_os'] == 'ELF_NOTE_OS_LINUX' and \
                                     (abi_tag['abi_major'],
-                                    abi_tag['abi_minor'],
-                                    abi_tag['abi_tiny']) == (2, 6, 32):
+                                     abi_tag['abi_minor'],
+                                     abi_tag['abi_tiny']) == (2, 6, 32):
                                 self._need_continuous_relocations = True
         if self._need_continuous_relocations:
             logging.debug(' * detected buggy loader/old ABI version and BIND_NOW,'\
