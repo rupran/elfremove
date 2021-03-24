@@ -30,7 +30,8 @@ from elftools.elf.sections import Section, SymbolTableSection
 from elftools.elf.relocation import RelocationSection
 from elftools.elf.dynamic import DynamicSegment
 from elftools.elf.hash import ELFHashTable, GNUHashTable
-from elftools.elf.enums import ENUM_RELOC_TYPE_x64, ENUM_RELOC_TYPE_i386, ENUM_DT_FLAGS
+from elftools.elf.enums import ENUM_RELOC_TYPE_x64, ENUM_RELOC_TYPE_i386, \
+    ENUM_DT_FLAGS, ENUM_DT_FLAGS_1
 
 class SectionWrapper:
 
@@ -111,25 +112,30 @@ class ELFRemove:
         # bug, the .rela.dyn and .rela.plt sections have to be continuous when
         # BIND_NOW is set or PLT relocations might remain unprocessed.
         self._need_continuous_relocations = False
-        if os.environ.get('LD_BUGGY', ''):
-            self._need_continuous_relocations = True
-        elif self._dynamic:
+        if self._dynamic:
             flags = list(self._dynamic.section.iter_tags('DT_FLAGS'))
-            if flags and int(flags[0].entry.d_val & ENUM_DT_FLAGS['DF_BIND_NOW']):
-                # BIND_NOW, maybe check .note.ABI-tag
-                id_section = self._elffile.get_section_by_name('.note.ABI-tag')
-                if id_section:
-                    for note in id_section.iter_notes():
-                        if note['n_type'] != 'NT_GNU_ABI_TAG':
-                            continue
-                        abi_tag = note['n_desc']
-                        if abi_tag['abi_os'] == 'ELF_NOTE_OS_LINUX' and \
-                                (abi_tag['abi_major'],
-                                 abi_tag['abi_minor'],
-                                 abi_tag['abi_tiny']) == (2, 6, 32):
-                            self._need_continuous_relocations = True
+            flags_1 = list(self._dynamic.section.iter_tags('DT_FLAGS_1'))
+            bind_now = list(self._dynamic.section.iter_tags('DT_BIND_NOW'))
+            if flags and flags[0].entry.d_val) & ENUM_DT_FLAGS['DF_BIND_NOW'] or \
+                    flags_1 and flags_1[0].entry.d_val & ENUM_DT_FLAGS_1['DF_1_NOW'] or \
+                    bind_now:
+                # BIND_NOW, check environment variable or .note.ABI-tag
+                if os.environ.get('LD_BUGGY') is not None:
+                    self._need_continuous_relocations = True
+                else:
+                    id_section = self._elffile.get_section_by_name('.note.ABI-tag')
+                    if id_section:
+                        for note in id_section.iter_notes():
+                            if note['n_type'] != 'NT_GNU_ABI_TAG':
+                                continue
+                            abi_tag = note['n_desc']
+                            if abi_tag['abi_os'] == 'ELF_NOTE_OS_LINUX' and \
+                                    (abi_tag['abi_major'],
+                                    abi_tag['abi_minor'],
+                                    abi_tag['abi_tiny']) == (2, 6, 32):
+                                self._need_continuous_relocations = True
         if self._need_continuous_relocations:
-            logging.debug(' * detected old ABI version and BIND_NOW,'\
+            logging.debug(' * detected buggy loader/old ABI version and BIND_NOW,'\
                             ' keeping relocations continuous...')
 
         if not self.symtab:
