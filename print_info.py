@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 
 # Copyright 2018-2019, Julian Geus <julian.geus@fau.de>
-# Copyright 2018-2020, Andreas Ziegler <andreas.ziegler@fau.de>
+# Copyright 2018-2021, Andreas Ziegler <andreas.ziegler@fau.de>
 #
 # This file is part of ELFRemove.
 #
