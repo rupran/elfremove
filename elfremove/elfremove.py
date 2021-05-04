@@ -263,14 +263,7 @@ class ELFRemove:
 
         return header
 
-    '''
-    Function:   _change_section_size
-    Parameter:  section = Tuple with section object and index (object, index)
-                size    = size in Bytes
-
-    Description: Decreases the size of the given section in its header by 'size' bytes
-    '''
-    def _change_section_size(self, section, size):
+    def _set_section_size(self, section, value, subtract_from_orig=False):
         # can't change section header f no header in elffile
         if section.index == -1:
             return
@@ -279,26 +272,42 @@ class ELFRemove:
         if self._elffile.header['e_machine'] == 'EM_X86_64':
             # 64 Bit - seek to current section header + offset to size of section
             self._f.seek(off_to_head + 32)
-            size_bytes = self._f.read(8)
-            value = int.from_bytes(size_bytes, self._byteorder, signed=False)
-            if value < size:
+            old_bytes = self._f.read(8)
+            old_value = int.from_bytes(old_bytes, self._byteorder, signed=False)
+            if old_value < value:
                 raise Exception('Size of section broken! Section: {}'.format(section.section.name)
                                 + ' Size: {}'.format(value))
-            value -= size
+            if subtract_from_orig:
+                new_value = old_value - value
+            else:
+                new_value = value
             self._f.seek(off_to_head + 32)
-            self._f.write(value.to_bytes(8, self._byteorder))
-            section.section.header['sh_size'] = value
+            self._f.write(new_value.to_bytes(8, self._byteorder))
+            section.section.header['sh_size'] = new_value
         elif self._elffile.header['e_machine'] == 'EM_386':
             # 32 Bit
             self._f.seek(off_to_head + 20)
-            size_bytes = self._f.read(4)
-            value = int.from_bytes(size_bytes, self._byteorder, signed=False)
-            if value <= size:
+            old_bytes = self._f.read(4)
+            old_value = int.from_bytes(old_bytes, self._byteorder, signed=False)
+            if old_value < value:
                 raise Exception('Size of section broken')
-            value -= size
+            if subtract_from_orig:
+                new_value = old_value - value
+            else:
+                new_value = value
             self._f.seek(off_to_head + 20)
-            self._f.write(value.to_bytes(4, self._byteorder))
-            section.section.header['sh_size'] = value
+            self._f.write(new_value.to_bytes(4, self._byteorder))
+            section.section.header['sh_size'] = new_value
+
+    '''
+    Function:   _change_section_size
+    Parameter:  section = Tuple with section object and index (object, index)
+                size    = size in Bytes
+
+    Description: Decreases the size of the given section in its header by 'size' bytes
+    '''
+    def _change_section_size(self, section, amount):
+        self._set_section_size(section, amount, subtract_from_orig=True)
 
     def _write_dynamic_tag(self, target_tag, value, subtract_from_orig=False):
         dynamic_section = self._dynamic.section
@@ -636,35 +645,66 @@ class ELFRemove:
 
             # find every symbol in hash table
             for i in range(1, self.dynsym.section.num_symbols()):
-                name = self.dynsym.section.get_symbol(i).name
-                print("Check hash of symbol: " + name)
+                sym = self.dynsym.section.get_symbol(i)
+                name = sym.name
+                #print("Check hash of symbol: " + name)
                 sym_hash = self._elfhash(name)
                 bucket = sym_hash % sect.params['nbuckets']
                 cur_ptr = sect.params['buckets'][bucket]
                 found = 0
                 while cur_ptr != 0:
                     if self.dynsym.section.get_symbol(cur_ptr).name == name:
-                        print("     Found!")
+                        #print("     Found!")
                         found = 1
                         break
                     cur_ptr = sect.params['chains'][cur_ptr]
                 if found == 0:
-                    raise Exception("Symbol not found in bucket!!! Hash Section broken!")
+                    raise Exception("Symbol {} not found in bucket!!! Hash Section broken!".format(name))
 
-    def _batch_remove_elf_hash(self, symbol_list):
+    def _calc_nbuckets(self, n_hashes):
+        options = [1, 3, 17, 37, 67, 97, 131, 197, 263, 521, 1031, 2053, 4099,
+                   8209, 16411, 32771, 65537, 131101, 262147]
+        ins_point = bisect.bisect(options, n_hashes)
+        return options[ins_point-1]
+
+    '''
+    Function:   _recreate_elf_hash
+    Parameter:  dynsym         = the already modified dynsym section (symbols
+                                 have already been removed).
+                n_removed_syms = the number of symbols that were removed from
+                                 the dynsym table
+
+    Description: creates a new '.hash' section based on the rewritten dynsym
+                 and writes it to the target file
+    '''
+    def _recreate_elf_hash(self, dynsym, n_removed_syms):
         if self._elf_hash is None:
             return
 
         sect = ELFHashTable(self._elffile,
                             self._elf_hash.section.header['sh_offset'],
-                            self.dynsym.section)
+                            dynsym.section)
         params = {'nbuckets': sect.params['nbuckets'],
                   'nchains': sect.params['nchains'],
                   'buckets': sect.params['buckets'],
                   'chains': sect.params['chains']}
 
-        for symbol in symbol_list:
-            self._edit_elf_hashtable(symbol.name, symbol.index, params)
+        # Gaps in new_buckets and new_chains will be filled with 0 when writing
+        # the contents out, indicating either no symbol in the current bucket
+        # or the end of a chain
+        new_buckets = {}
+        new_chains = {}
+
+        params['nchains'] -= n_removed_syms
+        params['nbuckets'] = self._calc_nbuckets(params['nchains'])
+
+        for idx, symbol in enumerate(dynsym.section.iter_symbols()):
+            bucket = self._elfhash(symbol.name) % params['nbuckets']
+            # Insert current symbol as the first one (in the corresponding
+            # bucket entry) and set the link to the previous first symbol by
+            # setting the chain entry to the current value from buckets.
+            new_chains[idx] = new_buckets.get(bucket, 0)
+            new_buckets[bucket] = idx
 
         # Zero out old hash table
         self._f.seek(self._elf_hash.section.header['sh_offset'])
@@ -679,64 +719,17 @@ class ELFRemove:
         self._f.write(params['nchains'].to_bytes(4, self._byteorder))
 
         # - buckets
-        out = b''.join(params['buckets'][i].to_bytes(4, self._byteorder) \
+        out = b''.join(new_buckets.get(i, 0).to_bytes(4, self._byteorder) \
                        for i in range(0, params['nbuckets']))
         self._f.write(out)
 
         # - chains
-        out = b''.join(params['chains'][i].to_bytes(4, self._byteorder) \
+        out = b''.join(new_chains.get(i, 0).to_bytes(4, self._byteorder) \
                        for i in range(0, params['nchains']))
         self._f.write(out)
 
-        self._change_section_size(self._elf_hash, len(symbol_list) * 4)
-
-    '''
-    Function:   _edit_elf_hashtable
-    Parameter:  symbol_name   = name of the Symbol to be removed
-                dynsym_nr     = nr of the given symbol in the dynsym table
-                params        = the parameters of the ELF hash table
-
-    Description: removes the given Symbol from the '.hash' section
-    '''
-    def _edit_elf_hashtable(self, symbol_name, dynsym_nr, params):
-        func_hash = self._elfhash(symbol_name)
-        bucket_nr = func_hash % params['nbuckets']
-        logging.debug('\t%s: adjust hash_section, hash = %x bucket = %d',
-                      symbol_name, func_hash, bucket_nr)
-
-        # find symbol and remove entry from chain
-        cur_ptr = params['buckets'][bucket_nr]
-
-        # case: first elem -> change start value of Bucket
-        if cur_ptr == dynsym_nr:
-            params['buckets'][bucket_nr] = params['chains'][cur_ptr]
-        else:
-            while cur_ptr != 0:
-                prev_ptr = cur_ptr
-                cur_ptr = params['chains'][cur_ptr]
-                # case: middle and last element -> set pointer to next element in previous element
-                if cur_ptr == dynsym_nr:
-                    params['chains'][prev_ptr] = params['chains'][cur_ptr]
-                    break
-                if cur_ptr == 0:
-                    raise Exception("Entry \'{}\' not found in Hash Table!".format(symbol_name) +
-                                    "Hash Table is broken!")
-
-        # delete entry and change pointer in list
-        for i in range(dynsym_nr, (params['nchains'] - 1)):
-            params['chains'][i] = params['chains'][i + 1]
-
-        params['chains'][params['nchains'] - 1] = 0
-        params['nchains'] -= 1
-
-        for i in range(0, params['nchains']):
-            if params['chains'][i] >= dynsym_nr:
-                params['chains'][i] -= 1
-
-        for i in range(0, params['nbuckets']):
-            if params['buckets'][i] >= dynsym_nr:
-                params['buckets'][i] -= 1
-
+        self._set_section_size(self._elf_hash,
+                               (2 + params['nchains'] + params['nbuckets']) * 4)
 
     def _batch_remove_gnu_hashtable(self, symbol_list, dynsym_size):
         if self._gnu_hash is None:
@@ -928,8 +921,8 @@ class ELFRemove:
             self.dynsym = section
             logging.info('* adapting PLT relocation entries')
             self._batch_remove_relocs(sorted_list, self._rel_plt)
-            logging.info('* adapting ELF-style hashes')
-            self._batch_remove_elf_hash(sorted_list)
+            logging.info('* rebuilding ELF-style hashes')
+            self._recreate_elf_hash(self.dynsym, removed)
             logging.info('* adapting symbol versions')
             self._batch_remove_gnu_versions(sorted_list, original_num_entries)
             logging.info('* adapting GNU-style hashes')
