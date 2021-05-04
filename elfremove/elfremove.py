@@ -839,9 +839,20 @@ class ELFRemove:
         # copy all entrys afterwards up by one
         params['chains'].pop(sym_nr)
 
-        # if last bit is set, set it at the value before
-        if (bucket_hash & 0x1) == 1 and sym_nr != 0:
-            params['chains'][sym_nr - 1] |= 0x00000001
+        # if last bit is set for deleted symbol...
+        if (bucket_hash & 0x1) == 1:
+            bucket = func_hash % params['nbuckets']
+            if sym_nr != 0:
+                # ... and the previous chain entry is also terminating a chain,
+                # mark the bucket as empty.
+                if params['chains'][sym_nr - 1] & 0x1 == 1:
+                    params['buckets'][bucket] = 0
+                # otherwise, mark the previous entry as the end of the chain.
+                params['chains'][sym_nr - 1] |= 0x00000001
+            # If we removed the first symbol and it was a terminating entry,
+            # we can also mark the first bucket as empty.
+            else:
+                params['buckets'][bucket] = 0
 
     '''
     Function:   remove_from_section
