@@ -785,6 +785,13 @@ class ELFRemove:
             params['buckets'][max_idx] = max(0, params['buckets'][max_idx] - num_earlier_removed_symbols)
             max_idx -= 1
 
+        # Set last entries in buckets array to 0 if all symbols for the last
+        # buckets have been deleted from the file.
+        max_idx = params['nbuckets'] - 1
+        while params['buckets'][max_idx] == dynsym_size - len(symbol_list):
+            params['buckets'][max_idx] = 0
+            max_idx -= 1
+
         # Write out buckets
         self._f.seek(bucket_start)
         buckets_bytes = struct.pack(self._endianness + str(params['nbuckets']) + 'I',
@@ -834,7 +841,7 @@ class ELFRemove:
 
         # if last bit is set, set it at the value before
         if (bucket_hash & 0x1) == 1 and sym_nr != 0:
-            params['chains'][sym_nr - 1] ^= 0x00000001
+            params['chains'][sym_nr - 1] |= 0x00000001
 
     '''
     Function:   remove_from_section
