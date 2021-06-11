@@ -841,7 +841,8 @@ class ELFRemove:
                 if params['chains'][sym_nr - 1] & 0x1 == 1:
                     params['buckets'][bucket] = 0
                 # otherwise, mark the previous entry as the end of the chain.
-                params['chains'][sym_nr - 1] |= 0x00000001
+                else:
+                    params['chains'][sym_nr - 1] |= 0x00000001
             # If we removed the first symbol and it was a terminating entry,
             # we can also mark the first bucket as empty.
             else:
