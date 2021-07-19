@@ -23,6 +23,7 @@ import os
 import argparse
 from shutil import copyfile
 import logging
+import time
 
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), '../librarytrader'))
 
@@ -39,8 +40,48 @@ parser.add_argument('--addr_list', action="store_true", help='print list of remo
 parser.add_argument('-v', '--verbose', action="store_true", help='set verbosity')
 parser.add_argument('--debug', action="store_true", help=argparse.SUPPRESS)
 
+def collect_statistics(lib, elf_rem, parse_time, disas_time, shrink_time,
+                       collection, local, prev_dynsym_entries, new_path, full_set):
+    size_of_text = 0
+    for section in elf_rem._elffile.iter_sections():
+        if section.name == '.text':
+            size_of_text = section["sh_size"]
+
+    # unique addresses in both dictionaries
+    global_dict = {}
+    local_dict = {}
+    for x in collection:
+        global_dict[x.value] = max(global_dict.get(x.value, 0), x.size)
+    for start, size in local:
+        local_dict[start] = max(local_dict.get(start, 0), size)
+
+    addr_dict = global_dict.copy()
+    addr_dict.update(local_dict)
+
+    total_b_rem = 0
+    for _, v in addr_dict.items():
+        total_b_rem += v
+
+    unique_globals = len(lib.exported_addrs)
+    unique_locals = len(lib.local_functions)
+    filesize = os.path.getsize(lib.fullname)
+
+    full_set.add('{},{},{},{},{},{},{},{},{},{},{},{}'.format(lib.fullname,
+                                                              prev_dynsym_entries,
+                                                              size_of_text,
+                                                              unique_globals,
+                                                              unique_locals,
+                                                              size_of_text - total_b_rem,
+                                                              unique_globals - len(global_dict),
+                                                              unique_locals - len(local_dict),
+                                                              parse_time,
+                                                              disas_time,
+                                                              shrink_time,
+                                                              filesize))
+
 def proc():
 
+    stats_set = set()
     # get all unused symbol addresses
     store = LibraryStore()
     try:
@@ -87,6 +128,7 @@ def proc():
             print("Library \'" + filename + "\' already exists! Ignoring!")
             continue
 
+        before = time.time()
         # open library file as ELFRemove object
         elf_rem = None
         if(args.overwrite):
@@ -156,6 +198,7 @@ def proc():
                                                             new_size)
                 symbol.size = new_size
 
+        prev_dynsym_entries = (elf_rem.dynsym.section.header['sh_size'] // elf_rem.dynsym.section.header['sh_entsize'])
         # display statistics
         elf_rem.print_collection_info(collection_dynsym, args.debug, local)
 
@@ -168,6 +211,10 @@ def proc():
             if(elf_rem.symtab != None):
                 # don't override functions again
                 elf_rem.remove_from_section(elf_rem.symtab, collection_symtab, False)
+            shrink_time = time.time() - before
+            collect_statistics(lib, elf_rem, lib.parse_time, lib.total_disas_time,
+                               shrink_time, collection_dynsym, local,
+                               prev_dynsym_entries, filename, stats_set)
         except Exception as e:
             print("Caught exception!")
             import traceback
@@ -187,6 +234,17 @@ def proc():
             else:
                 os.remove(filename)
             sys.exit(1)
+
+    # filename, dynsym size before, code size before, number of exports before,
+    # number of local before, code size after, global functions after,
+    # local functions after, time
+    with open(directory + 'stats.csv', 'w') as outfd:
+        outfd.write('filename,dynsym_entries before,code size before,exported functions before,'\
+            'local functions before,code size after,exported functions after,'\
+            'local functions after,parse time,disas time,shrink time,filesize before\n')
+        for line in sorted(stats_set):
+            outfd.write(line)
+            outfd.write('\n')
 
 
 if __name__ == '__main__':
