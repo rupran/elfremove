@@ -95,7 +95,7 @@ def proc():
 
     # create folder for tailored / original librarys
     directory = ""
-    if(not args.overwrite):
+    if not args.overwrite:
         directory = "./tailored_libs_" + os.path.basename(args.json) + '/'
     else:
         directory = "./original_libs_" + os.path.basename(args.json) + '/'
@@ -105,24 +105,24 @@ def proc():
     for lib in libobjs:
 
         # if no librarys where given -> use all
-        if(args.lib and os.path.basename(lib.fullname) not in args.lib):
+        if args.lib and os.path.basename(lib.fullname) not in args.lib:
             continue
-        if(args.libonly and not os.path.basename(lib.fullname).startswith("lib")):
+        if args.libonly and not os.path.basename(lib.fullname).startswith("lib"):
             continue
 
         filename = directory + lib.fullname
 
-        if(not os.path.isdir(os.path.dirname(filename))):
+        if not os.path.isdir(os.path.dirname(filename)):
             os.makedirs(os.path.dirname(filename))
 
-        if(not args.overwrite):
+        if not args.overwrite:
             print("\nTailoring library: " + filename)
         else:
             print("\nTailoring library: " + lib.fullname)
 
 
         # copy library to folder
-        if(not os.path.exists(filename)):
+        if not os.path.exists(filename):
             copyfile(lib.fullname, filename)
         else:
             print("Library \'" + filename + "\' already exists! Ignoring!")
@@ -131,16 +131,16 @@ def proc():
         before = time.time()
         # open library file as ELFRemove object
         elf_rem = None
-        if(args.overwrite):
+        if args.overwrite:
             ans = input("System library file \'" + lib.fullname + "\' will be changed! Are you sure? (yes):")
-            if(ans == 'yes'):
+            if ans == 'yes':
                 elf_rem = ELFRemove(lib.fullname)
             else:
                 continue
         else:
             elf_rem = ELFRemove(filename)
 
-        if(elf_rem.dynsym == None):
+        if elf_rem.dynsym is None:
             print('dynsym table not found in File!')
             continue
 
@@ -148,7 +148,7 @@ def proc():
         blacklist = []
 
         blacklist_file = "blacklist_" + os.path.basename(lib.fullname)
-        if(os.path.exists(blacklist_file)):
+        if os.path.exists(blacklist_file):
             print("Found blacklist file for: " + os.path.basename(lib.fullname))
             with open(blacklist_file, "r") as file:
                 blacklist_s = file.readlines()
@@ -157,25 +157,22 @@ def proc():
         # get all functions to remove from library
         addr = set()
         for key in store[lib.fullname].exported_addrs.keys():
-            if(key not in blacklist):
+            if key not in blacklist:
                 value = store[lib.fullname].export_users[key]
-                if(not value):
+                if not value:
                     addr.add(key)
             else:
                 print("In blacklist: " + str(key))
 
         # collect and remove local functions
         local = set()
-        if(args.local):
+        if args.local:
             for key in store[lib.fullname].local_functions.keys():
-                # TODO all keys double -> as string and int, why?
-                if(isinstance(key, str)):
-                    continue
                 if key >= 0xffffffff:
                     continue
-                if(key not in blacklist):
+                if key not in blacklist:
                     value = store[lib.fullname].local_users.get(key, [])
-                    if(not value and store[lib.fullname].ranges[key] > 0):
+                    if not value and store[lib.fullname].ranges[key] > 0:
                         local.add((key, store[lib.fullname].ranges[key]))
                 else:
                     print("Local in blacklist: " + str(key))
@@ -184,8 +181,9 @@ def proc():
 
         # collect the set of Symbols for given function names
         collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, addr)
-        if(elf_rem.symtab != None):
-            collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab, elf_rem.get_collection_names(collection_dynsym))
+        if elf_rem.symtab is not None:
+            collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab,
+                                                                elf_rem.get_collection_names(collection_dynsym))
 
         # Fix sizes to remove nop-only gaps
         ranges = store[lib.fullname].ranges
@@ -198,7 +196,8 @@ def proc():
                                                             new_size)
                 symbol.size = new_size
 
-        prev_dynsym_entries = (elf_rem.dynsym.section.header['sh_size'] // elf_rem.dynsym.section.header['sh_entsize'])
+        prev_dynsym_entries = (elf_rem.dynsym.section.header['sh_size'] //
+                               elf_rem.dynsym.section.header['sh_entsize'])
         # display statistics
         elf_rem.print_collection_info(collection_dynsym, args.debug, local)
 
@@ -208,7 +207,7 @@ def proc():
         # remove symbols from file
         try:
             elf_rem.remove_from_section(elf_rem.dynsym, collection_dynsym)
-            if(elf_rem.symtab != None):
+            if elf_rem.symtab is not None:
                 # don't override functions again
                 elf_rem.remove_from_section(elf_rem.symtab, collection_symtab, False)
             shrink_time = time.time() - before
@@ -219,7 +218,7 @@ def proc():
             print("Caught exception!")
             import traceback
             traceback.print_exc()
-            if(args.overwrite):
+            if args.overwrite:
                 copyfile(filename, lib.fullname)
             else:
                 os.remove(filename)
@@ -229,7 +228,7 @@ def proc():
             print("Keyboard Interrupt!")
             import traceback
             traceback.print_exc()
-            if(args.overwrite):
+            if args.overwrite:
                 copyfile(filename, lib.fullname)
             else:
                 os.remove(filename)
