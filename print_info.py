@@ -60,9 +60,9 @@ def proc():
     for lib in sorted(libobjs, key=lambda x: x.fullname):
 
         # if no librarys where given -> use all
-        if(args.lib and os.path.basename(lib.fullname) not in args.lib):
+        if args.lib and os.path.basename(lib.fullname) not in args.lib:
             continue
-        if(args.libonly and not os.path.basename(lib.fullname).startswith("lib")):
+        if args.libonly and not os.path.basename(lib.fullname).startswith("lib"):
             continue
 
         print("\nLibrary: " + lib.fullname)
@@ -77,7 +77,7 @@ def proc():
         except:
             continue
 
-        if(elf_rem.dynsym == None):
+        if elf_rem.dynsym is None:
             print('dynsym table not found in File!')
             continue
 
@@ -85,7 +85,7 @@ def proc():
         blacklist = []
 
         blacklist_file = "blacklist_" + os.path.basename(lib.fullname)
-        if(os.path.exists(blacklist_file)):
+        if os.path.exists(blacklist_file):
             print("Found blacklist file for: " + os.path.basename(lib.fullname))
             with open(blacklist_file, "r") as file:
                 blacklist_s = file.readlines()
@@ -94,26 +94,26 @@ def proc():
         # get all functions to remove from library
         addr = []
         for key in store[lib.fullname].exported_addrs.keys():
-            if(key not in blacklist):
+            if key not in blacklist:
                 value = store[lib.fullname].export_users[key]
-                if(not value):
+                if not value:
                     addr.append(key)
 
         # collect and remove local functions
         local = []
-        if(args.local):
+        if args.local:
             for key in store[lib.fullname].local_functions.keys():
                 # TODO all keys double -> as string and int, why?
-                if(isinstance(key, str)):
+                if isinstance(key, str):
                     continue
-                if(key not in blacklist):
+                if key not in blacklist:
                     value = store[lib.fullname].local_users.get(key, [])
                     if (not value and store[lib.fullname].ranges[key] > 0):
                         local.append((key, store[lib.fullname].ranges[key]))
 
         # collect the set of Symbols for given function names
         collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, addr)
-        if(elf_rem.symtab != None):
+        if elf_rem.symtab is not None:
             collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab, elf_rem.get_collection_names(collection_dynsym))
 
         # Fix sizes to remove nop-only gaps
@@ -163,9 +163,9 @@ def proc():
                     if start != end:
                         fd.write('-k 0x{:x}-0x{:x}\n'.format(start, end))
 
-        elif(args.addr_list):
+        elif args.addr_list:
             elf_rem.print_collection_addr(collection_dynsym, local)
-        elif(args.func_list):
+        elif args.func_list:
             elf_rem.print_collection_info(collection_dynsym, True, local)
         else:
             elf_rem.print_collection_info(collection_dynsym, False, local)
