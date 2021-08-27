@@ -23,6 +23,7 @@ import os
 import argparse
 from shutil import copyfile
 import logging
+import subprocess
 import time
 
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), '../librarytrader'))
@@ -40,7 +41,7 @@ parser.add_argument('--addr_list', action="store_true", help='print list of remo
 parser.add_argument('-v', '--verbose', action="store_true", help='set verbosity')
 parser.add_argument('--debug', action="store_true", help=argparse.SUPPRESS)
 
-def collect_statistics(lib, elf_rem, parse_time, disas_time, shrink_time,
+def collect_statistics(lib, elf_rem, parse_time, disas_time, shrink_time, file_size,
                        collection, local, prev_dynsym_entries, new_path, full_set):
     size_of_text = 0
     for section in elf_rem._elffile.iter_sections():
@@ -64,7 +65,6 @@ def collect_statistics(lib, elf_rem, parse_time, disas_time, shrink_time,
 
     unique_globals = len(lib.exported_addrs)
     unique_locals = len(lib.local_functions)
-    filesize = os.path.getsize(lib.fullname)
 
     full_set.add('{},{},{},{},{},{},{},{},{},{},{},{}'.format(lib.fullname,
                                                               prev_dynsym_entries,
@@ -77,7 +77,7 @@ def collect_statistics(lib, elf_rem, parse_time, disas_time, shrink_time,
                                                               parse_time,
                                                               disas_time,
                                                               shrink_time,
-                                                              filesize))
+                                                              file_size))
 
 def proc():
 
@@ -211,8 +211,17 @@ def proc():
                 # don't override functions again
                 elf_rem.remove_from_section(elf_rem.symtab, collection_symtab, False)
             shrink_time = time.time() - before
+
+            # strip debug sections from copied library file
+            if not args.overwrite:
+                logging.debug('* Running \'strip -s %s\'', filename)
+                retval = subprocess.run(['strip', '-s', filename])
+                if retval.returncode != 0:
+                    logging.error('  * Error stripping %s!', filename)
+            file_size = os.stat(filename).st_size
+
             collect_statistics(lib, elf_rem, lib.parse_time, lib.total_disas_time,
-                               shrink_time, collection_dynsym, local,
+                               shrink_time, file_size, collection_dynsym, local,
                                prev_dynsym_entries, filename, stats_set)
         except Exception as e:
             print("Caught exception!")
