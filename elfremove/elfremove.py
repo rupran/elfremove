@@ -898,7 +898,7 @@ class ELFRemove:
             #### Overwrite function with zeros ####
             if overwrite and section.index != -1:
                 if symbol_t.value != 0 and symbol_t.size != 0:
-                    logging.debug('  * overwriting text segment with zeros')
+                    logging.debug('  * overwriting text segment with 0xcc')
                     self._f.seek(symbol_t.value)
                     self._f.write(b'\xcc' * symbol_t.size)
             removed += 1
@@ -941,7 +941,8 @@ class ELFRemove:
                 NOTE: collection contains indices of Symbols -> all collections are invalidated
                       after symboltable changes.
 
-    Description: removes the symbols from the given symboltable
+    Description: Gathers a list of symbols which are described by the symbol
+                 or address list given as the parameter
     '''
     def collect_symbols_by_name(self, section, symbol_list, complement=False):
         logging.info('* searching symbols (by name) to delete in section: %s',
