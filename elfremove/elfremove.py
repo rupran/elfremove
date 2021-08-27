@@ -1083,7 +1083,7 @@ class ELFRemove:
     '''
     helper functions
     '''
-    def print_collection_addr(self, collection, local=None):
+    def get_collection_addr(self, collection, local=None):
         # create dictionary to ensure no double values
         addr_dict = {}
         for ent in collection:
@@ -1093,8 +1093,11 @@ class ELFRemove:
                 addr_dict[func[0]] = func[1]
 
         # sort by address
-        ordered = collections.OrderedDict(sorted(addr_dict.items()))
-        for k, v in ordered.items():
+        return collections.OrderedDict(sorted(addr_dict.items()))
+
+    def print_collection_addr(self, collection, local=None):
+        ordered_collection = self.get_collection_addr(collection, local)
+        for k, v in ordered_collection.items():
             print(str(k) + " " + str(v))
 
     def get_collection_names(self, collection):

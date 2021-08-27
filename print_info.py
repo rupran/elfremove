@@ -36,6 +36,7 @@ parser.add_argument('--lib', nargs='*', help='list of librarys to be processed, 
 parser.add_argument('--libonly', action="store_true", help='name of binary has to start with \'lib\'')
 parser.add_argument('--addr_list', action="store_true", help='print list of removed locations (addresses) with size')
 parser.add_argument('--func_list', action="store_true", help='print list of functions')
+parser.add_argument('--shrinkelf_params', action="store_true", help='generate parameter files for shrinkelf')
 parser.add_argument('--debug', action="store_true", help=argparse.SUPPRESS)
 
 def proc():
@@ -51,7 +52,12 @@ def proc():
 
     libobjs = store.get_library_objects()
 
-    for lib in libobjs:
+    directory = "./tailored_libs_" + os.path.basename(args.json) + '/'
+    if not os.path.exists(directory):
+        logging.error('output directory does not exist, exiting...')
+        sys.exit(1)
+
+    for lib in sorted(libobjs, key=lambda x: x.fullname):
 
         # if no librarys where given -> use all
         if(args.lib and os.path.basename(lib.fullname) not in args.lib):
@@ -62,6 +68,7 @@ def proc():
         print("\nLibrary: " + lib.fullname)
 
         filename = lib.fullname
+        tailored_filename = directory + lib.fullname
 
         # open library file as ELFRemove object
         elf_rem = None
@@ -121,7 +128,42 @@ def proc():
                 symbol.size = new_size
 
         # display statistics
-        if(args.addr_list):
+        if args.shrinkelf_params:
+            addrs = elf_rem.get_collection_addr(collection_dynsym, local)
+            basename = os.path.basename(filename)
+            list_name = 'func_offset_parameters_{}'.format(basename)
+
+            total_size = os.stat(tailored_filename).st_size
+
+            # Generate ranges to keep in the output file, starting from the
+            # beginning of the file. Gaps between sections are parsed by
+            # shrinkelf itself.
+            ranges = []
+            ranges.append([0])
+            index = 0
+            for start, size in addrs.items():
+                # addrs contains removed functions so the end of the range
+                # to keep is the start of the removed function and the beginning
+                # of the next range to keep is the end of the removed function
+                end = start
+                next_start = start + size
+                # if the ranges would be immediately adjacent, merge them by
+                # skipping the update of the previous and creation of a new
+                # range
+                if next_start == end:
+                    continue
+                ranges[index].append(end)
+                ranges.append([next_start])
+                index += 1
+            ranges[index].append(total_size)
+
+            # Write the parameter list to the output file
+            with open(list_name, 'w') as fd:
+                for start, end in ranges:
+                    if start != end:
+                        fd.write('-k 0x{:x}-0x{:x}\n'.format(start, end))
+
+        elif(args.addr_list):
             elf_rem.print_collection_addr(collection_dynsym, local)
         elif(args.func_list):
             elf_rem.print_collection_info(collection_dynsym, True, local)
