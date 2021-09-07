@@ -59,8 +59,8 @@ class ELFRemove:
     Description: Is automatically called on object creation.
              Opens the given library and searches for the requiered sections.
     '''
-    def __init__(self, filename):
-        self._f = open(filename, 'r+b', buffering=0)
+    def __init__(self, filename, open_mode='r+b'):
+        self._f = open(filename, open_mode, buffering=0)
         self._elffile = ELFFile(self._f)
         self._byteorder = 'little' if self._elffile.little_endian else 'big'
         self._endianness = '<' if self._elffile.little_endian else '>'

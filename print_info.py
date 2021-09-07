@@ -73,7 +73,7 @@ def proc():
         # open library file as ELFRemove object
         elf_rem = None
         try:
-            elf_rem = ELFRemove(filename)
+            elf_rem = ELFRemove(filename, open_mode='rb')
         except:
             continue
 
