@@ -131,7 +131,7 @@ def proc():
         if args.shrinkelf_params:
             addrs = elf_rem.get_collection_addr(collection_dynsym, local)
             basename = os.path.basename(filename)
-            list_name = 'func_offset_parameters_{}'.format(basename)
+            list_name = 'keep_file_{}'.format(basename)
 
             total_size = os.stat(tailored_filename).st_size
 
@@ -161,7 +161,7 @@ def proc():
             with open(list_name, 'w') as fd:
                 for start, end in ranges:
                     if start != end:
-                        fd.write('-k 0x{:x}-0x{:x}\n'.format(start, end))
+                        fd.write('0x{:x}-0x{:x}\n'.format(start, end))
 
         elif args.addr_list:
             elf_rem.print_collection_addr(collection_dynsym, local)
