@@ -1107,6 +1107,16 @@ class ELFRemove:
             symbols.append(sym.name)
         return symbols
 
+    def fixup_function_ranges(self, collection, ranges, lib):
+        for symbol in collection:
+            if symbol.value in ranges and ranges[symbol.value] != symbol.size:
+                new_size = ranges[symbol.value]
+                logging.debug('fix size for %s:%x: %d->%d', lib.fullname,
+                                                            symbol.value,
+                                                            symbol.size,
+                                                            new_size)
+                symbol.size = new_size
+
     def get_keep_list(self, total_size, collection, local=None):
         addrs = self.get_collection_addr(collection, local)
         # Generate ranges to keep in the output file, starting from the

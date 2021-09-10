@@ -186,19 +186,14 @@ def proc():
             collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab,
                                                                 elf_rem.get_collection_names(collection_dynsym))
 
-        # Fix sizes to remove nop-only gaps
-        ranges = store[lib.fullname].ranges
-        for symbol in collection_dynsym:
-            if symbol.value in ranges and ranges[symbol.value] != symbol.size:
-                new_size = ranges[symbol.value]
-                logging.debug('fix size for %s:%x: %d->%d', lib.fullname,
-                                                            symbol.value,
-                                                            symbol.size,
-                                                            new_size)
-                symbol.size = new_size
-
+        # Store number of dynsym entries before shrinking
         prev_dynsym_entries = (elf_rem.dynsym.section.header['sh_size'] //
                                elf_rem.dynsym.section.header['sh_entsize'])
+
+        # Fix sizes in collection to remove nop-only gaps
+        ranges = store[lib.fullname].ranges
+        elf_rem.fixup_function_ranges(collection_dynsym, ranges, lib)
+
         # display statistics
         elf_rem.print_collection_info(collection_dynsym, args.debug, local)
 
