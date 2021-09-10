@@ -38,6 +38,7 @@ parser.add_argument('--lib', nargs='*', help='list of librarys to be processed, 
 parser.add_argument('--libonly', action="store_true", help='name of binary has to start with \'lib\'')
 parser.add_argument('--overwrite', action="store_true", help='overwrite original library files, otherwise work with a copy in the current working directory')
 parser.add_argument('--addr_list', action="store_true", help='print list of removed locations (addresses) with size')
+parser.add_argument('--keep_files', action="store_true", help='generate keep files for shrinkelf')
 parser.add_argument('-v', '--verbose', action="store_true", help='set verbosity')
 parser.add_argument('--debug', action="store_true", help=argparse.SUPPRESS)
 
@@ -200,6 +201,17 @@ def proc():
                                elf_rem.dynsym.section.header['sh_entsize'])
         # display statistics
         elf_rem.print_collection_info(collection_dynsym, args.debug, local)
+
+        # Generate parameter file for shrinkelf
+        if args.keep_files:
+            total_size = os.stat(filename).st_size
+            # Write the parameter list to the output file
+            with open('keep_file_{}'.format(os.path.basename(filename)), 'w') as fd:
+                for start, end in elf_rem.get_keep_list(total_size,
+                                                        collection_dynsym,
+                                                        local):
+                    if start != end:
+                        fd.write('0x{:x}-0x{:x}\n'.format(start, end))
 
         if args.addr_list:
             elf_rem.print_collection_addr(collection_dynsym, local)

@@ -1106,3 +1106,28 @@ class ELFRemove:
         for sym in collection:
             symbols.append(sym.name)
         return symbols
+
+    def get_keep_list(self, total_size, collection, local=None):
+        addrs = self.get_collection_addr(collection, local)
+        # Generate ranges to keep in the output file, starting from the
+        # beginning of the file. Gaps between sections are parsed by
+        # shrinkelf itself.
+        ranges = []
+        ranges.append([0])
+        index = 0
+        for start, size in addrs.items():
+            # addrs contains removed functions so the end of the range
+            # to keep is the start of the removed function and the beginning
+            # of the next range to keep is the end of the removed function
+            end = start
+            next_start = start + size
+            # if the ranges would be immediately adjacent, merge them by
+            # skipping the update of the previous and creation of a new
+            # range
+            if next_start == end:
+                continue
+            ranges[index].append(end)
+            ranges.append([next_start])
+            index += 1
+        ranges[index].append(total_size)
+        return ranges
