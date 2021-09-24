@@ -31,7 +31,7 @@ def proc(filename, functions):
     # collect the complementary set of Symbols for given function names
     collection_dynsym = elf_rem.collect_symbols_by_name(elf_rem.dynsym, functions)
     if(elf_rem.symtab != None):
-        collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab, elf_rem.get_collection_names(collection_dynsym))
+        collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab, set(elf_rem.get_collection_names(collection_dynsym)))
 
     print('Functions to remove from library dynsym:')
     elf_rem.print_collection_info(collection_dynsym)

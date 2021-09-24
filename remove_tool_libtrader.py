@@ -184,7 +184,7 @@ def proc():
         collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, addr)
         if elf_rem.symtab is not None:
             collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab,
-                                                                elf_rem.get_collection_names(collection_dynsym))
+                                                                set(elf_rem.get_collection_names(collection_dynsym)))
 
         # Store number of dynsym entries before shrinking
         prev_dynsym_entries = (elf_rem.dynsym.section.header['sh_size'] //

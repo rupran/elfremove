@@ -114,7 +114,8 @@ def proc():
         # collect the set of Symbols for given function names
         collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, addr)
         if elf_rem.symtab is not None:
-            collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab, elf_rem.get_collection_names(collection_dynsym))
+            collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab,
+                                                                set(elf_rem.get_collection_names(collection_dynsym)))
 
         # Fix sizes in collection to remove nop-only gaps
         ranges = store[lib.fullname].ranges

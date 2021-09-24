@@ -1014,7 +1014,7 @@ class ELFRemove:
             self._f.write(b'\xCC' * size)
 
         if self.symtab is not None:
-            addr = [start for start, size in func_tuple_list]
+            addr = set(start for start, size in func_tuple_list)
             collection = self.collect_symbols_by_address(self.symtab, addr)
             self.remove_from_section(self.symtab, collection, overwrite=False)
 
