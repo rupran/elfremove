@@ -56,21 +56,22 @@ and tailors the included files according to the analysis results.
 **Usage:**
 
 ```
-./remove_tool_libtrader.py [-h] [-l] [--lib [LIB [LIB ...]]] [--libonly] [--overwrite] [-v] json
+./remove_tool_libtrader.py [-h] [-l] [--lib [LIB ...]] [--libonly] [--overwrite] [--addr_list] [--keep_files] [-v] json
 
-	json:  the json file from librarytrader
+Remove unneccessary symbols of given librarys.
+
+positional arguments:
+  json             the json file from libtrader
 
 optional arguments:
-  -h, --help            show this help message and exit
-  -l, --local           remove local functions
-  --lib [LIB [LIB ...]]
-                        list of librarys to be processed, use all librarys
-                        from json file if not defined
-  --libonly             name of binary has to start with 'lib'
-  --overwrite           overwrite original library files, otherwise work with
-                        a copy in the current working directory
-  --addr_list           print list of removed locations (addresses) with size
-  -v, --verbose         set verbosity
+  -h, --help       show this help message and exit
+  -l, --local      remove local functions
+  --lib [LIB ...]  list of librarys to be processed, use all librarys from json file if not defined
+  --libonly        name of binary has to start with 'lib'
+  --overwrite      overwrite original library files, otherwise work with a copy in the current working directory
+  --addr_list      print list of removed locations (addresses) with size
+  --keep_files     generate keep files for shrinkelf
+  -v, --verbose    set verbosity
 ```
 
 **Output**:
