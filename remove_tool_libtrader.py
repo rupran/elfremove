@@ -197,17 +197,6 @@ def proc():
         # display statistics
         elf_rem.print_collection_info(collection_dynsym, args.debug, local)
 
-        # Generate parameter file for shrinkelf
-        if args.keep_files:
-            total_size = os.stat(filename).st_size
-            # Write the parameter list to the output file
-            with open('keep_file_{}'.format(os.path.basename(filename)), 'w') as fd:
-                for start, end in elf_rem.get_keep_list(total_size,
-                                                        collection_dynsym,
-                                                        local):
-                    if start != end:
-                        fd.write('0x{:x}-0x{:x}\n'.format(start, end))
-
         if args.addr_list:
             elf_rem.print_collection_addr(collection_dynsym, local)
 
@@ -226,6 +215,17 @@ def proc():
                 if retval.returncode != 0:
                     logging.error('  * Error stripping %s!', filename)
             file_size = os.stat(filename).st_size
+
+            # Generate parameter file for shrinkelf
+            if args.keep_files:
+                # Write the parameter list to the output file
+                with open('keep_file_{}'.format(os.path.basename(filename)), 'w') as fd:
+                    for start, end in elf_rem.get_keep_list(file_size,
+                                                            collection_dynsym,
+                                                            local):
+                        if start != end:
+                            fd.write('0x{:x}-0x{:x}\n'.format(start, end))
+
 
             collect_statistics(lib, elf_rem, lib.parse_time, lib.total_disas_time,
                                shrink_time, file_size, collection_dynsym, local,
