@@ -263,41 +263,37 @@ class ELFRemove:
 
         return header
 
-    def _set_section_size(self, section, value, subtract_from_orig=False):
+    def _set_section_attribute(self, section, attribute, value, subtract_from_orig=False):
         # can't change section header f no header in elffile
         if section.index == -1:
             return
+        machine_type = self._elffile.header['e_machine']
+        if attribute == 'sh_size':
+            member_offset, member_size = (32, 8) if machine_type == 'EM_X86_64' else (20, 4)
+        elif attribute == 'sh_info':
+            member_offset, member_size = (44, 4) if machine_type == 'EM_X86_64' else (28, 4)
+        else:
+            raise Exception('Trying to set invalid section attribute {}'.format(attribute))
+
         head_entsize = self._elffile['e_shentsize']
         off_to_head = self._elffile['e_shoff'] + (head_entsize * section.index)
-        if self._elffile.header['e_machine'] == 'EM_X86_64':
-            # 64 Bit - seek to current section header + offset to size of section
-            self._f.seek(off_to_head + 32)
-            old_bytes = self._f.read(8)
-            old_value = int.from_bytes(old_bytes, self._byteorder, signed=False)
-            if old_value < value:
-                raise Exception('Size of section broken! Section: {}'.format(section.section.name)
-                                + ' Size: {}'.format(value))
-            if subtract_from_orig:
-                new_value = old_value - value
-            else:
-                new_value = value
-            self._f.seek(off_to_head + 32)
-            self._f.write(new_value.to_bytes(8, self._byteorder))
-            section.section.header['sh_size'] = new_value
-        elif self._elffile.header['e_machine'] == 'EM_386':
-            # 32 Bit
-            self._f.seek(off_to_head + 20)
-            old_bytes = self._f.read(4)
-            old_value = int.from_bytes(old_bytes, self._byteorder, signed=False)
-            if old_value < value:
-                raise Exception('Size of section broken')
-            if subtract_from_orig:
-                new_value = old_value - value
-            else:
-                new_value = value
-            self._f.seek(off_to_head + 20)
-            self._f.write(new_value.to_bytes(4, self._byteorder))
-            section.section.header['sh_size'] = new_value
+
+        self._f.seek(off_to_head + member_offset)
+        old_bytes = self._f.read(member_size)
+        old_value = int.from_bytes(old_bytes, self._byteorder, signed=False)
+        if old_value < value:
+            raise Exception('Size of section broken! Section: {}'.format(section.section.name)
+                            + ' Size: {}'.format(value))
+        if subtract_from_orig:
+            new_value = old_value - value
+        else:
+            new_value = value
+        self._f.seek(off_to_head + member_offset)
+        self._f.write(new_value.to_bytes(member_size, self._byteorder))
+        section.section.header['sh_size'] = new_value
+
+    def _set_section_size(self, section, value, subtract_from_orig=False):
+        self._set_section_attribute(section, 'sh_size', value, subtract_from_orig)
 
     '''
     Function:   _change_section_size
@@ -308,6 +304,9 @@ class ELFRemove:
     '''
     def _change_section_size(self, section, amount):
         self._set_section_size(section, amount, subtract_from_orig=True)
+
+    def _set_section_info(self, section, value, subtract_from_orig=False):
+        self._set_section_attribute(section, 'sh_info', value, subtract_from_orig)
 
     def _write_dynamic_tag(self, target_tag, value, subtract_from_orig=False):
         dynamic_section = self._dynamic.section
@@ -848,6 +847,21 @@ class ELFRemove:
             else:
                 params['buckets'][bucket] = 0
 
+    # Fix the sh_info field of the corresponding section header table entry.
+    # For symbol tables, sh_info must be set to the index of the first non-local
+    # symbol in the table.
+    def _fix_sh_info(self, section, section_entries):
+        first_nonlocal = 0
+        sh_info_offset = 4 if self._elffile.header['e_machine'] == 'EM_X86_64' else 12
+        for idx, entry in enumerate(section_entries):
+            # #define ELF32_ST_BIND(info)          ((info) >> 4)
+            # #define ELF64_ST_BIND(info)          ((info) >> 4)
+            current_bind = entry[sh_info_offset:sh_info_offset+1][0] >> 4
+            if current_bind != 0:
+                first_nonlocal = idx
+                break
+        self._set_section_info(section, first_nonlocal)
+
     '''
     Function:   remove_from_section
     Parameter:  section     = section tuple (self.dynsym, self.symtab)
@@ -911,6 +925,7 @@ class ELFRemove:
             self._f.write(b''.join(section_entries) + (sh_entsize * removed) * b'\00')
 
         self._change_section_size(section, removed * sh_entsize)
+        self._fix_sh_info(section, section_entries)
         section = SectionWrapper(section.section, section.index, section.version + 1)
 
         #TODO: check if symtab relocation removal really works, we didnt do
