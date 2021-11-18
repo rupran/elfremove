@@ -149,30 +149,34 @@ class ELFRemove:
                 for debug_path in external_debug_dir.split(':'):
                     paths.insert(0, os.path.join(debug_path, os.path.basename(filename)))
                     paths.insert(1, os.path.join(debug_path, os.path.basename(filename) + '.debug'))
+
             id_section = self._elffile.get_section_by_name('.note.gnu.build-id')
             if not id_section:
                 logging.debug('search for external symtab: no id_section')
-                return
-
-            for note in id_section.iter_notes():
-                if note['n_type'] != 'NT_GNU_BUILD_ID':
-                    continue
-                build_id = note['n_desc']
-                paths.insert(0, os.path.join(BUILDID_DIR,
-                                             build_id[:2],
-                                             build_id[2:] + '.debug'))
-                external_buildid_dir = os.environ.get('EXTERNAL_BUILDID_DIR', '')
-                if external_buildid_dir:
-                    paths.insert(0, os.path.join(external_buildid_dir,
-                                                 build_id[:2],
-                                                 build_id[2:] + '.debug'))
+            else:
+                for note in id_section.iter_notes():
+                    if note['n_type'] != 'NT_GNU_BUILD_ID':
+                        continue
+                    build_id = note['n_desc']
+                    paths.insert(0, os.path.join(BUILDID_DIR,
+                                                build_id[:2],
+                                                build_id[2:] + '.debug'))
+                    external_buildid_dir = os.environ.get('EXTERNAL_BUILDID_DIR', '')
+                    if external_buildid_dir:
+                        paths.insert(0, os.path.join(external_buildid_dir,
+                                                    build_id[:2],
+                                                    build_id[2:] + '.debug'))
             for path in paths:
                 if not os.path.isfile(path):
                     logging.debug('search for external symtab: no path %s', path)
                     continue
                 try:
                     external_elf = ELFFile(open(path, 'rb'))
-                    self.symtab = SectionWrapper(external_elf.get_section_by_name('.symtab'), -1, 0)
+                    external_symtab = external_elf.get_section_by_name('.symtab')
+                    if external_symtab is None:
+                        logging.debug('no .symtab in external file %s', path)
+                        continue
+                    self.symtab = SectionWrapper(external_symtab, -1, 0)
                     logging.debug('Found external symtab for %s at %s',
                                   filename, path)
                     break

@@ -24,6 +24,7 @@ import argparse
 from shutil import copyfile
 import logging
 import subprocess
+import tempfile
 import time
 
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), '../librarytrader'))
@@ -80,6 +81,34 @@ def collect_statistics(lib, elf_rem, parse_time, disas_time, shrink_time, file_s
                                                               shrink_time,
                                                               file_size))
 
+def extract_debuginfo(directory, filename, lib):
+    debug_filename = os.path.join(directory, lib.fullname.lstrip('/') + '.debug')
+    debug_subdirectory = os.path.dirname(debug_filename)
+    os.makedirs(os.path.dirname(debug_filename), exist_ok=True)
+    logging.debug('* Trying to extract debug information')
+    retval = subprocess.run(['strip', '--only-keep-debug', '-o',
+                                debug_filename, filename])
+    if retval.returncode != 0:
+        logging.error(' * Error pulling debug info from %s', filename)
+    else:
+        logging.debug(' * Debug information now at %s', debug_filename)
+        debug_environ = os.environ.get('EXTERNAL_DEBUG_DIR', '')
+        paths = [p for p in debug_environ.split(':') if p]
+        if debug_subdirectory not in paths:
+            if debug_environ:
+                debug_environ += ':' + debug_subdirectory
+            else:
+                debug_environ = debug_subdirectory
+        os.environ['EXTERNAL_DEBUG_DIR'] = debug_environ
+        logging.debug(' * EXTERNAL_DEBUG_DIR is now set to %s', os.environ['EXTERNAL_DEBUG_DIR'])
+
+def strip_target_file(filename, args):
+    if not args.overwrite:
+        logging.debug('* Running \'strip -s %s\'', filename)
+        retval = subprocess.run(['strip', '-s', filename])
+        if retval.returncode != 0:
+            logging.error('  * Error stripping %s!', filename)
+
 def proc():
 
     stats_set = set()
@@ -102,6 +131,8 @@ def proc():
         directory = "./original_libs_" + os.path.basename(args.json) + '/'
     if not os.path.exists(directory):
         os.makedirs(directory)
+
+    debuginfo_tempdir = tempfile.mkdtemp(prefix='elfremove_')
 
     for lib in libobjs:
 
@@ -128,6 +159,14 @@ def proc():
         else:
             print("Library \'" + filename + "\' already exists! Ignoring!")
             continue
+
+        # Strip debug information to a temporary directory
+        extract_debuginfo(debuginfo_tempdir, filename, lib)
+
+        # strip debug sections from copied library file
+        strip_target_file(filename, args)
+
+        file_size = os.stat(filename).st_size
 
         before = time.time()
         # open library file as ELFRemove object
@@ -206,15 +245,8 @@ def proc():
             if elf_rem.symtab is not None:
                 # don't override functions again
                 elf_rem.remove_from_section(elf_rem.symtab, collection_symtab, False)
-            shrink_time = time.time() - before
 
-            # strip debug sections from copied library file
-            if not args.overwrite:
-                logging.debug('* Running \'strip -s %s\'', filename)
-                retval = subprocess.run(['strip', '-s', filename])
-                if retval.returncode != 0:
-                    logging.error('  * Error stripping %s!', filename)
-            file_size = os.stat(filename).st_size
+            shrink_time = time.time() - before
 
             # Generate parameter file for shrinkelf
             if args.keep_files:
@@ -225,7 +257,6 @@ def proc():
                                                             local):
                         if start != end:
                             fd.write('0x{:x}-0x{:x}\n'.format(start, end))
-
 
             collect_statistics(lib, elf_rem, lib.parse_time, lib.total_disas_time,
                                shrink_time, file_size, collection_dynsym, local,
@@ -261,6 +292,7 @@ def proc():
             outfd.write(line)
             outfd.write('\n')
 
+    # TODO: delete temporary symtab files and directory
 
 if __name__ == '__main__':
     args = parser.parse_args()
