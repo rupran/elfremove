@@ -294,7 +294,7 @@ class ELFRemove:
             new_value = value
         self._f.seek(off_to_head + member_offset)
         self._f.write(new_value.to_bytes(member_size, self._byteorder))
-        section.section.header['sh_size'] = new_value
+        section.section.header[attribute] = new_value
 
     def _set_section_size(self, section, value, subtract_from_orig=False):
         self._set_section_attribute(section, 'sh_size', value, subtract_from_orig)
