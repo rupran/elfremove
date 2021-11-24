@@ -168,7 +168,6 @@ def proc():
 
         file_size = os.stat(filename).st_size
 
-        before = time.time()
         # open library file as ELFRemove object
         elf_rem = None
         if args.overwrite:
@@ -184,6 +183,7 @@ def proc():
             print('dynsym table not found in File!')
             continue
 
+        before = time.time()
         # get all blacklistet functions created by test script
         blacklist = []
 
