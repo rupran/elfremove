@@ -12,5 +12,6 @@ setup(
     zip_safe = False,
     install_requires = [
         'pyelftools>=0.27',
+        'pylibdebuginfod'
     ]
 )

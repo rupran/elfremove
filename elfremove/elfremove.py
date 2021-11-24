@@ -32,6 +32,7 @@ from elftools.elf.dynamic import DynamicSegment
 from elftools.elf.hash import ELFHashTable, GNUHashTable
 from elftools.elf.enums import ENUM_RELOC_TYPE_x64, ENUM_RELOC_TYPE_i386, \
     ENUM_DT_FLAGS, ENUM_DT_FLAGS_1
+from libdebuginfod import DebugInfoD
 
 class SectionWrapper:
 
@@ -73,6 +74,7 @@ class ELFRemove:
         self._elf_hash = None
         self._dynamic = None
         self._blacklist = ["_init", "_fini"]
+        self._external_elf_fd = None
 
         #### check for supported architecture ####
         if self._elffile.header['e_machine'] != 'EM_X86_64' and self._elffile.header['e_machine'] != 'EM_386':
@@ -150,6 +152,7 @@ class ELFRemove:
                     paths.insert(0, os.path.join(debug_path, os.path.basename(filename)))
                     paths.insert(1, os.path.join(debug_path, os.path.basename(filename) + '.debug'))
 
+            build_id = None
             id_section = self._elffile.get_section_by_name('.note.gnu.build-id')
             if not id_section:
                 logging.debug('search for external symtab: no id_section')
@@ -171,23 +174,42 @@ class ELFRemove:
                     logging.debug('search for external symtab: no path %s', path)
                     continue
                 try:
-                    external_elf = ELFFile(open(path, 'rb'))
+                    self._external_elf_fd = open(path, 'rb')
+                    external_elf = ELFFile(self._external_elf_fd)
                     external_symtab = external_elf.get_section_by_name('.symtab')
                     if external_symtab is None:
+                        self._external_elf_fd.close()
                         logging.debug('no .symtab in external file %s', path)
                         continue
                     self.symtab = SectionWrapper(external_symtab, -1, 0)
                     logging.debug('Found external symtab for %s at %s',
                                   filename, path)
                     break
-                except (ELFError, OSError) as err:
-                    logging.debug('Failed to open external symbol table for %s at %s: %s',
-                                  filename, path, err)
-                    continue
+                except OSError as err:
+                    logging.debug('Failed to open file at %s: %s', path, err)
+                except ELFError as err:
+                    logging.debug('Failed to open external ELF file %s for %s: %s',
+                                  path, filename, err)
+                    self._external_elf_fd.close()
+
+        if not self.symtab and 'USE_DEBUGINFOD' in os.environ and build_id:
+            try:
+                with DebugInfoD() as debuginfod:
+                    logging.debug('Querying debuginfod for debug info')
+                    fd, path = debuginfod.find_debuginfo(build_id)
+                    if fd > 0:
+                        self._external_elf_fd = os.fdopen(fd, 'rb')
+                        external_elf = ELFFile(self._external_elf_fd)
+                        symtab = external_elf.get_section_by_name('.symtab')
+                        if symtab:
+                            logging.debug('Found symtab using debuginfod at %s',
+                                          path.decode('utf-8'))
+                            self.symtab = SectionWrapper(symtab, -1, 0)
+            except (ELFError, OSError, FileNotFoundError) as e:
+                logging.debug('libdebuginfod query failed: %s', e)
 
         if self.symtab:
             logging.debug('* found a .symtab section for %s', filename)
-
 
         # fallback if section headers have been stripped from the binary
         if self.dynsym is None and self.symtab is None:
@@ -246,6 +268,8 @@ class ELFRemove:
 
     def __del__(self):
         self._f.close()
+        if self._external_elf_fd:
+            self._external_elf_fd.close()
 
     '''
     Helper functions for section-object creation
