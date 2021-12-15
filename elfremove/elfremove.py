@@ -594,8 +594,9 @@ class ELFRemove:
             # entry with the corresponding symbol_number. We will end up in this
             # case when all R_XX_relative entries with (0, sym_addr) have been
             # removed from the relocation table.
-            elif not is_symtab:
+            elif not is_symtab and push:
                 cur_idx = bisect.bisect_left(sort_keys, (sym_nr, 0), cur_idx)
+                continue
 
             cur_idx += 1
 
