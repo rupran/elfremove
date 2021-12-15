@@ -45,35 +45,20 @@ parser.add_argument('--debug', action="store_true", help=argparse.SUPPRESS)
 
 def collect_statistics(lib, elf_rem, parse_time, disas_time, shrink_time, file_size,
                        collection, local, prev_dynsym_entries, new_path, full_set):
-    size_of_text = 0
-    for section in elf_rem._elffile.iter_sections():
-        if section.name == '.text':
-            size_of_text = section["sh_size"]
-
+    exec_bytes = elf_rem.get_executable_bytes()
+    removed_bytes = elf_rem.get_removed_bytes(collection, local)
     # unique addresses in both dictionaries
-    global_dict = {}
-    local_dict = {}
-    for x in collection:
-        global_dict[x.value] = max(global_dict.get(x.value, 0), x.size)
-    for start, size in local:
-        local_dict[start] = max(local_dict.get(start, 0), size)
-
-    addr_dict = global_dict.copy()
-    addr_dict.update(local_dict)
-
-    total_b_rem = 0
-    for _, v in addr_dict.items():
-        total_b_rem += v
+    global_dict, local_dict = elf_rem.get_size_dicts(collection, local)
 
     unique_globals = len(lib.exported_addrs)
     unique_locals = len(lib.local_functions)
 
     full_set.add('{},{},{},{},{},{},{},{},{},{},{},{}'.format(lib.fullname,
                                                               prev_dynsym_entries,
-                                                              size_of_text,
+                                                              exec_bytes,
                                                               unique_globals,
                                                               unique_locals,
-                                                              size_of_text - total_b_rem,
+                                                              exec_bytes - removed_bytes,
                                                               unique_globals - len(global_dict),
                                                               unique_locals - len(local_dict),
                                                               parse_time,

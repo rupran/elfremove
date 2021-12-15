@@ -1061,6 +1061,34 @@ class ELFRemove:
             collection = self.collect_symbols_by_address(self.symtab, addr)
             self.remove_from_section(self.symtab, collection, overwrite=False)
 
+    def get_executable_bytes(self):
+        exec_bytes = 0
+        for segment in self._elffile.iter_segments():
+            if segment['p_flags'] & 0x1:
+                exec_bytes += segment['p_filesz']
+        return exec_bytes
+
+    def get_size_dicts(self, collection, local=None):
+        global_dict = {}
+        local_dict = {}
+        for x in collection:
+            global_dict[x.value] = max(global_dict.get(x.value, 0), x.size)
+        if local:
+            for start, size in local:
+                local_dict[start] = max(local_dict.get(start, 0), size)
+
+        return (global_dict, local_dict)
+
+    def get_removed_bytes(self, collection, local):
+        global_dict, local_dict = self.get_size_dicts(collection, local)
+        addr_dict = global_dict.copy()
+        addr_dict.update(local_dict)
+
+        removed_bytes = 0
+        for _, v in addr_dict.items():
+            removed_bytes += v
+        return removed_bytes
+
     '''
     Function:   print_collection_info
     Parameter:  collection = a collection of symbols returned from a collect_* function
@@ -1090,24 +1118,8 @@ class ELFRemove:
             for sym in collection:
                 print(line.format(sym.name, sym.index, sym.value, hex(sym.size), sym.sec_version))
         else:
-            size_of_text = 0
-            for section in self._elffile.iter_sections():
-                if section.name == '.text':
-                    size_of_text = section["sh_size"]
-
-            # create dict for unique address values
-            addr_dict = {}
-            for ent in collection:
-                addr_dict[ent.value] = ent.size
-
-            if local:
-                for start, size in local:
-                    addr_dict[start] = size
-
-            total_b_rem = 0
-            for _, v in addr_dict.items():
-                #print(sym.name + " ", end="", flush=True)
-                total_b_rem += v
+            exec_bytes = self.get_executable_bytes()
+            removed_bytes = self.get_removed_bytes(collection, local)
 
             dynsym_entrys = (self.dynsym.section.header['sh_size'] // self.dynsym.section.header['sh_entsize'])
 
@@ -1115,14 +1127,14 @@ class ELFRemove:
             print("    Nr of symbols to remove: " + str(len(collection)))
             if local:
                 print("    Nr of local functions to remove: " + str(len(local)))
-            if size_of_text != 0:
-                print("Total size of text Segment: " + str(size_of_text))
-                print("    Nr of bytes overwritten: " + str(total_b_rem))
-                print("    Percentage of code overwritte: " + str((total_b_rem / size_of_text) * 100))
+            if exec_bytes != 0:
+                print("Total size of text Segment: " + str(exec_bytes))
+                print("    Nr of bytes overwritten: " + str(removed_bytes))
+                print("    Percentage of executable bytes overwritten: " + str((removed_bytes / exec_bytes) * 100))
             else:
                 print("Size of text Segment not given in section header")
 
-            #print(" & " + str(dynsym_entrys) + " & " + str(len(collection)) + " & " + str(len(local)) + " & " + str(size_of_text) + " & " + str(total_b_rem) + " & " + str((total_b_rem / size_of_text) * 100) + "\\% \\\\")
+            #print(" & " + str(dynsym_entrys) + " & " + str(len(collection)) + " & " + str(len(local)) + " & " + str(exec_bytes) + " & " + str(removed_bytes) + " & " + str((removed_bytes / exec_bytes) * 100) + "\\% \\\\")
 
     '''
     helper functions
