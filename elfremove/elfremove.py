@@ -113,6 +113,10 @@ class ELFRemove:
         # Special case for wrong loader behaviour before glibc 2.23. Due to a
         # bug, the .rela.dyn and .rela.plt sections have to be continuous when
         # BIND_NOW is set or PLT relocations might remain unprocessed.
+        # Additionally, if we shrink the ld-linux binary itself,
+        # the relocation tables need to be continuous before upstream commit
+        # f64f4ce06930 ("elf: Assume disjointed .rela.dyn and .rela.plt for
+        # loader").
         self._need_continuous_relocations = False
         if self._dynamic:
             flags = list(self._dynamic.section.iter_tags('DT_FLAGS'))
@@ -136,9 +140,13 @@ class ELFRemove:
                                      abi_tag['abi_minor'],
                                      abi_tag['abi_tiny']) == (2, 6, 32):
                                 self._need_continuous_relocations = True
-        if self._need_continuous_relocations:
-            logging.debug(' * detected buggy loader/old ABI version and BIND_NOW,'\
-                            ' keeping relocations continuous...')
+            if self._need_continuous_relocations:
+                logging.debug('* detected buggy loader/old ABI version and'\
+                              ' BIND_NOW, keeping relocations continuous...')
+        if 'ld-linux-' in os.path.basename(filename):
+            logging.debug('* detected ld-linux binary, keeping relocations'\
+                          ' continuous.')
+            self._need_continuous_relocations = True
 
         if not self.symtab:
             _arch_dir = 'x86_64-linux-gnu' if self._elffile.header['e_machine'] == 'EM_X86_64' \
