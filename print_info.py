@@ -100,7 +100,7 @@ def proc():
                     addr.append(key)
 
         # collect and remove local functions
-        local = []
+        local = set()
         if args.local:
             for key in store[lib.fullname].local_functions.keys():
                 # TODO all keys double -> as string and int, why?
@@ -109,35 +109,32 @@ def proc():
                 if key not in blacklist:
                     value = store[lib.fullname].local_users.get(key, [])
                     if (not value and store[lib.fullname].ranges[key] > 0):
-                        local.append((key, store[lib.fullname].ranges[key]))
+                        local.add((key, store[lib.fullname].ranges[key]))
+        elf_rem.local_functions = local
 
-        # collect the set of Symbols for given function names
-        collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, addr)
+        # collect the set of Symbols for given function addresses
+        elf_rem.collect_symbols_in_dynsym(addrs=addr)
         if elf_rem.symtab is not None:
-            collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab,
-                                                                set(elf_rem.get_collection_names(collection_dynsym)))
+            elf_rem.collect_symbols_in_symtab(names=elf_rem.get_dynsym_names())
 
         # Fix sizes in collection to remove nop-only gaps
-        ranges = store[lib.fullname].ranges
-        elf_rem.fixup_function_ranges(collection_dynsym, ranges, lib)
+        elf_rem.fixup_function_ranges(lib, store[lib.fullname].ranges)
 
         # display statistics
         if args.keep_files:
             total_size = os.stat(tailored_filename).st_size
             # Write the parameter list to the output file
             with open('keep_file_{}'.format(os.path.basename(filename)), 'w') as fd:
-                for start, end in elf_rem.get_keep_list(total_size,
-                                                        collection_dynsym,
-                                                        local):
+                for start, end in elf_rem.get_keep_list(total_size):
                     if start != end:
                         fd.write('0x{:x}-0x{:x}\n'.format(start, end))
 
         elif args.addr_list:
-            elf_rem.print_collection_addr(collection_dynsym, local)
+            elf_rem.print_function_addresses()
         elif args.func_list:
-            elf_rem.print_collection_info(collection_dynsym, True, local)
+            elf_rem.print_removed_functions()
         else:
-            elf_rem.print_collection_info(collection_dynsym, False, local)
+            elf_rem.print_dynsym_info()
 
 if __name__ == '__main__':
     args = parser.parse_args()

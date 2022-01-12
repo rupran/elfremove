@@ -26,6 +26,7 @@ import logging
 import subprocess
 import tempfile
 import time
+import traceback
 
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), '../librarytrader'))
 
@@ -44,11 +45,11 @@ parser.add_argument('-v', '--verbose', action="store_true", help='set verbosity'
 parser.add_argument('--debug', action="store_true", help=argparse.SUPPRESS)
 
 def collect_statistics(lib, elf_rem, parse_time, disas_time, shrink_time, file_size,
-                       collection, local, prev_dynsym_entries, new_path, full_set):
+                       prev_dynsym_entries, full_set):
     exec_bytes = elf_rem.get_executable_bytes()
-    removed_bytes = elf_rem.get_removed_bytes(collection, local)
+    removed_bytes = elf_rem.get_removed_bytes()
     # unique addresses in both dictionaries
-    global_dict, local_dict = elf_rem.get_size_dicts(collection, local)
+    global_dict, local_dict = elf_rem.get_size_dicts()
 
     unique_globals = len(lib.exported_addrs)
     unique_locals = len(lib.local_functions)
@@ -87,7 +88,7 @@ def extract_debuginfo(directory, filename, lib):
         os.environ['EXTERNAL_DEBUG_DIR'] = debug_environ
         logging.debug(' * EXTERNAL_DEBUG_DIR is now set to %s', os.environ['EXTERNAL_DEBUG_DIR'])
 
-def strip_target_file(filename, args):
+def strip_target_file(filename):
     if not args.overwrite:
         logging.debug('* Running \'strip -s %s\'', filename)
         retval = subprocess.run(['strip', '-s', filename])
@@ -149,7 +150,7 @@ def proc():
         extract_debuginfo(debuginfo_tempdir, filename, lib)
 
         # strip debug sections from copied library file
-        strip_target_file(filename, args)
+        strip_target_file(filename)
 
         file_size = os.stat(filename).st_size
 
@@ -201,35 +202,37 @@ def proc():
                         local.add((key, store[lib.fullname].ranges[key]))
                 else:
                     print("Local in blacklist: " + str(key))
+        elf_rem.local_functions = local
 
-        elf_rem.overwrite_local_functions(local)
+        elf_rem.overwrite_local_functions()
 
-        # collect the set of Symbols for given function names
-        collection_dynsym = elf_rem.collect_symbols_by_address(elf_rem.dynsym, addr)
+        # collect the set of Symbols for given function addresses
+        elf_rem.collect_symbols_in_dynsym(addrs=addr)
         if elf_rem.symtab is not None:
-            collection_symtab = elf_rem.collect_symbols_by_name(elf_rem.symtab,
-                                                                set(elf_rem.get_collection_names(collection_dynsym)))
+            elf_rem.collect_symbols_in_symtab(names=elf_rem.get_dynsym_names())
 
         # Store number of dynsym entries before shrinking
         prev_dynsym_entries = (elf_rem.dynsym.section.header['sh_size'] //
                                elf_rem.dynsym.section.header['sh_entsize'])
 
         # Fix sizes in collection to remove nop-only gaps
-        ranges = store[lib.fullname].ranges
-        elf_rem.fixup_function_ranges(collection_dynsym, ranges, lib)
+        elf_rem.fixup_function_ranges(lib, store[lib.fullname].ranges)
 
         # display statistics
-        elf_rem.print_collection_info(collection_dynsym, args.debug, local)
+        if args.debug:
+            elf_rem.print_removed_functions()
+        else:
+            elf_rem.print_dynsym_info()
 
         if args.addr_list:
-            elf_rem.print_collection_addr(collection_dynsym, local)
+            elf_rem.print_function_addresses()
 
         # remove symbols from file
         try:
-            elf_rem.remove_from_section(elf_rem.dynsym, collection_dynsym)
+            elf_rem.remove_symbols_from_dynsym()
             if elf_rem.symtab is not None:
                 # don't override functions again
-                elf_rem.remove_from_section(elf_rem.symtab, collection_symtab, False)
+                elf_rem.remove_symbols_from_symtab(overwrite=False)
 
             shrink_time = time.time() - before
 
@@ -237,18 +240,14 @@ def proc():
             if args.keep_files:
                 # Write the parameter list to the output file
                 with open('keep_file_{}'.format(os.path.basename(filename)), 'w') as fd:
-                    for start, end in elf_rem.get_keep_list(file_size,
-                                                            collection_dynsym,
-                                                            local):
+                    for start, end in elf_rem.get_keep_list(file_size):
                         if start != end:
                             fd.write('0x{:x}-0x{:x}\n'.format(start, end))
 
             collect_statistics(lib, elf_rem, lib.parse_time, lib.total_disas_time,
-                               shrink_time, file_size, collection_dynsym, local,
-                               prev_dynsym_entries, filename, stats_set)
+                               shrink_time, file_size, prev_dynsym_entries, stats_set)
         except Exception as e:
             print("Caught exception!")
-            import traceback
             traceback.print_exc()
             if args.overwrite:
                 copyfile(filename, lib.fullname)
@@ -258,7 +257,6 @@ def proc():
             sys.exit(1)
         except KeyboardInterrupt:
             print("Keyboard Interrupt!")
-            import traceback
             traceback.print_exc()
             if args.overwrite:
                 copyfile(filename, lib.fullname)

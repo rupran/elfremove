@@ -76,6 +76,10 @@ class ELFRemove:
         self._blacklist = ["_init", "_fini"]
         self._external_elf_fd = None
 
+        self.collection_dynsym = None
+        self.collection_symtab = None
+        self.local_functions = set()
+
         #### check for supported architecture ####
         if self._elffile.header['e_machine'] != 'EM_X86_64' and self._elffile.header['e_machine'] != 'EM_386':
             raise Exception('Wrong Architecture!')
@@ -899,6 +903,12 @@ class ELFRemove:
                 break
         self._set_section_info(section, first_nonlocal)
 
+    def remove_symbols_from_dynsym(self, overwrite=True):
+        return self.remove_from_section(self.dynsym, self.collection_dynsym, overwrite)
+
+    def remove_symbols_from_symtab(self, overwrite=False):
+        return self.remove_from_section(self.symtab, self.collection_symtab, overwrite)
+
     '''
     Function:   remove_from_section
     Parameter:  section     = section tuple (self.dynsym, self.symtab)
@@ -984,6 +994,19 @@ class ELFRemove:
         logging.info('* ... done!')
         return removed
 
+    def collect_symbols_in_section(self, section, names=None, addrs=None, complement=False):
+        assert(names is not None or addrs is not None)
+        if names is not None:
+            return self.collect_symbols_by_name(section, names, complement)
+        else:
+            return self.collect_symbols_by_address(section, addrs, complement)
+
+    def collect_symbols_in_dynsym(self, names=None, addrs=None, complement=False):
+        self.collection_dynsym = self.collect_symbols_in_section(self.dynsym, names, addrs, complement)
+
+    def collect_symbols_in_symtab(self, names=None, addrs=None, complement=False):
+        self.collection_symtab = self.collect_symbols_in_section(self.symtab, names, addrs, complement)
+
     '''
     Function:   collect_symbols_by_name (and -_by_address)
     Parameter:  section     = symbol table to search in (self.symtab, self.dynsym)
@@ -1051,13 +1074,13 @@ class ELFRemove:
 
     '''
     Function:   overwrite local functions
-    Parameter:  func_tuple_list = list of tupels with address and size information for to be removed local functions
 
-    Description: overwrites the given functions in the text segment and removes the entries from symtab if present
+    Description: overwrites the local functions stored in the local_functions
+                 member and removes the entries from symtab if present
     '''
-    def overwrite_local_functions(self, func_tuple_list):
+    def overwrite_local_functions(self):
         logging.debug('* overwriting local functions')
-        for start, size in func_tuple_list:
+        for start, size in self.local_functions:
             if size == 0:
                 continue
             #### Overwrite function with null bytes ####
@@ -1066,9 +1089,9 @@ class ELFRemove:
             self._f.write(b'\xCC' * size)
 
         if self.symtab is not None:
-            addr = set(start for start, size in func_tuple_list)
-            collection = self.collect_symbols_by_address(self.symtab, addr)
-            self.remove_from_section(self.symtab, collection, overwrite=False)
+            addr = set(start for start, size in self.local_functions)
+            self.collect_symbols_in_symtab(addrs=addr)
+            self.remove_symbols_from_symtab(overwrite=False)
 
     def get_executable_bytes(self):
         exec_bytes = 0
@@ -1077,19 +1100,19 @@ class ELFRemove:
                 exec_bytes += segment['p_filesz']
         return exec_bytes
 
-    def get_size_dicts(self, collection, local=None):
+    def get_size_dicts(self):
         global_dict = {}
         local_dict = {}
-        for x in collection:
+        for x in self.collection_dynsym:
             global_dict[x.value] = max(global_dict.get(x.value, 0), x.size)
-        if local:
-            for start, size in local:
+        if self.local_functions:
+            for start, size in self.local_functions:
                 local_dict[start] = max(local_dict.get(start, 0), size)
 
         return (global_dict, local_dict)
 
-    def get_removed_bytes(self, collection, local):
-        global_dict, local_dict = self.get_size_dicts(collection, local)
+    def get_removed_bytes(self):
+        global_dict, local_dict = self.get_size_dicts()
         addr_dict = global_dict.copy()
         addr_dict.update(local_dict)
 
@@ -1099,80 +1122,88 @@ class ELFRemove:
         return removed_bytes
 
     '''
-    Function:   print_collection_info
-    Parameter:  collection = a collection of symbols returned from a collect_* function
-                full       = true - print all debug information, false - only a file statistic
-                local      = tuple list of local function which gets included in the statistics
+    Function:   print_removed_functions
+    Parameter:  from_symtab = True if .symtab should be used. The default value
+                if False which will use symbols from .dynsym.
 
-    Description: prints informations for the given collection of symbols
+    Description: prints information (name, index, address, size) about all
+                 removed functions for the selected symbol table.
     '''
-    def print_collection_info(self, collection, full=True, local=None):
-        if full:
-            if local is not None:
-                print('Local Functions: ' + str(len(local)))
-                line = "{0:<10} | {1:<6}"
-                print(line.format("Address", "Size"))
-                print(16 * '-')
-                for func in local:
-                    print(line.format(func[0], func[1]))
-
-            maxlen = 0
-            for x in collection:
-                if len(x.name) > maxlen:
-                    maxlen = len(x.name)
-            print('Symbols in collection: ' + str(len(collection)))
-            line = "{0:<" + str(maxlen) + "} | {1:<8} | {2:<10} | {3:<6} | {4:<6}"
-            print(line.format("Name", "Offset", "StartAddr", "Size", "Rev."))
-            print((maxlen + 40) * '-')
-            for sym in collection:
-                print(line.format(sym.name, sym.index, sym.value, hex(sym.size), sym.sec_version))
+    def print_removed_functions(self, from_symtab=False):
+        if from_symtab:
+            collection = self.collection_symtab
         else:
-            exec_bytes = self.get_executable_bytes()
-            removed_bytes = self.get_removed_bytes(collection, local)
+            collection = self.collection_dynsym
 
-            dynsym_entrys = (self.dynsym.section.header['sh_size'] // self.dynsym.section.header['sh_entsize'])
+        if self.local_functions is not None:
+            print('Local Functions: ' + str(len(self.local_functions)))
+            line = "{0:<10} | {1:<6}"
+            print(line.format("Address", "Size"))
+            print(16 * '-')
+            for func in self.local_functions:
+                print(line.format(func[0], func[1]))
 
-            print("Total number of symbols in dynsym: " + str(dynsym_entrys))
-            print("    Nr of symbols to remove: " + str(len(collection)))
-            if local:
-                print("    Nr of local functions to remove: " + str(len(local)))
-            if exec_bytes != 0:
-                print("Total size of text Segment: " + str(exec_bytes))
-                print("    Nr of bytes overwritten: " + str(removed_bytes))
-                print("    Percentage of executable bytes overwritten: " + str((removed_bytes / exec_bytes) * 100))
-            else:
-                print("Size of text Segment not given in section header")
+        maxlen = 0
+        for x in collection:
+            if len(x.name) > maxlen:
+                maxlen = len(x.name)
+        print('Symbols in collection: ' + str(len(collection)))
+        line = "{0:<" + str(maxlen) + "} | {1:<8} | {2:<10} | {3:<6} | {4:<6}"
+        print(line.format("Name", "Index", "StartAddr", "Size", "Rev."))
+        print((maxlen + 40) * '-')
+        for sym in collection:
+            print(line.format(sym.name, sym.index, sym.value, hex(sym.size), sym.sec_version))
+
+    '''
+    Function:   print_dynsym_info
+
+    Description: prints statistics about the .dynsym section and the number
+                 of symbols/bytes removed from the file.
+    '''
+    def print_dynsym_info(self):
+        exec_bytes = self.get_executable_bytes()
+        removed_bytes = self.get_removed_bytes()
+
+        dynsym_entrys = (self.dynsym.section.header['sh_size'] // self.dynsym.section.header['sh_entsize'])
+
+        print("Total number of symbols in dynsym: " + str(dynsym_entrys))
+        print("    Nr of symbols to remove: " + str(len(self.collection_dynsym)))
+        if self.local_functions:
+            print("    Nr of local functions to remove: " + str(len(self.local_functions)))
+        if exec_bytes != 0:
+            print("Total size of executable sections: " + str(exec_bytes))
+            print("    Nr of bytes overwritten: " + str(removed_bytes))
+            print("    Percentage of code sections overwritten: " + str((removed_bytes / exec_bytes) * 100))
+        else:
+            print("Size of text Segment not given in section header")
 
             #print(" & " + str(dynsym_entrys) + " & " + str(len(collection)) + " & " + str(len(local)) + " & " + str(exec_bytes) + " & " + str(removed_bytes) + " & " + str((removed_bytes / exec_bytes) * 100) + "\\% \\\\")
 
     '''
     helper functions
     '''
-    def get_collection_addr(self, collection, local=None):
+    def get_function_addresses(self):
         # create dictionary to ensure no double values
         addr_dict = {}
-        for ent in collection:
+        for ent in self.collection_dynsym:
             addr_dict[ent.value] = ent.size
-        if local:
-            for func in local:
+        if self.local_functions:
+            for func in self.local_functions:
                 addr_dict[func[0]] = func[1]
 
         # sort by address
         return collections.OrderedDict(sorted(addr_dict.items()))
 
-    def print_collection_addr(self, collection, local=None):
-        ordered_collection = self.get_collection_addr(collection, local)
+    def print_function_addresses(self):
+        ordered_collection = self.get_function_addresses()
         for k, v in ordered_collection.items():
             print(str(k) + " " + str(v))
 
-    def get_collection_names(self, collection):
-        symbols = []
-        for sym in collection:
-            symbols.append(sym.name)
-        return symbols
+    def get_dynsym_names(self):
+        return set(sym.name for sym in self.collection_dynsym)
 
-    def fixup_function_ranges(self, collection, ranges, lib):
-        for symbol in collection:
+    def fixup_function_ranges(self, lib, ranges):
+        for symbol in self.collection_dynsym:
             if symbol.value in ranges and ranges[symbol.value] != symbol.size:
                 new_size = ranges[symbol.value]
                 logging.debug('fix size for %s:%x: %d->%d', lib.fullname,
@@ -1181,8 +1212,8 @@ class ELFRemove:
                                                             new_size)
                 symbol.size = new_size
 
-    def get_keep_list(self, total_size, collection, local=None):
-        addrs = self.get_collection_addr(collection, local)
+    def get_keep_list(self, total_size):
+        addrs = self.get_function_addresses()
         # Generate ranges to keep in the output file, starting from the
         # beginning of the file. Gaps between sections are parsed by
         # shrinkelf itself.
