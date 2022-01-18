@@ -32,6 +32,7 @@ from elftools.elf.dynamic import DynamicSegment
 from elftools.elf.hash import ELFHashTable, GNUHashTable
 from elftools.elf.enums import ENUM_RELOC_TYPE_x64, ENUM_RELOC_TYPE_i386, \
     ENUM_DT_FLAGS, ENUM_DT_FLAGS_1
+from elftools.elf.constants import SH_FLAGS
 from libdebuginfod import DebugInfoD
 
 class SectionWrapper:
@@ -1095,9 +1096,9 @@ class ELFRemove:
 
     def get_executable_bytes(self):
         exec_bytes = 0
-        for segment in self._elffile.iter_segments():
-            if segment['p_flags'] & 0x1:
-                exec_bytes += segment['p_filesz']
+        for section in self._elffile.iter_sections():
+            if section['sh_flags'] & SH_FLAGS.SHF_EXECINSTR:
+                exec_bytes += section['sh_size']
         return exec_bytes
 
     def get_size_dicts(self):
