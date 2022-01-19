@@ -1203,11 +1203,11 @@ class ELFRemove:
     def get_dynsym_names(self):
         return set(sym.name for sym in self.collection_dynsym)
 
-    def fixup_function_ranges(self, lib, ranges):
+    def fixup_function_ranges(self, libname, ranges):
         for symbol in self.collection_dynsym:
             if symbol.value in ranges and ranges[symbol.value] != symbol.size:
                 new_size = ranges[symbol.value]
-                logging.debug('fix size for %s:%x: %d->%d', lib.fullname,
+                logging.debug('fix size for %s:%x: %d->%d', libname,
                                                             symbol.value,
                                                             symbol.size,
                                                             new_size)

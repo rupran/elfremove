@@ -39,6 +39,42 @@ parser.add_argument('--func_list', action="store_true", help='print list of func
 parser.add_argument('--keep_files', action="store_true", help='generate keep files for shrinkelf')
 parser.add_argument('--debug', action="store_true", help=argparse.SUPPRESS)
 
+def read_blacklist(lib):
+    blacklist = []
+
+    blacklist_file = "blacklist_" + os.path.basename(lib.fullname)
+    if os.path.exists(blacklist_file):
+        print("Found blacklist file for: " + os.path.basename(lib.fullname))
+        with open(blacklist_file, "r") as file:
+            blacklist_s = file.readlines()
+        blacklist = [int(x.strip(), 10) for x in blacklist_s]
+    return blacklist
+
+def collect_exported_addrs(lib, blacklist):
+    addr = set()
+    for key in lib.exported_addrs.keys():
+        if key not in blacklist:
+            value = lib.export_users[key]
+            if not value:
+                addr.add(key)
+        else:
+            print("In blacklist: " + str(key))
+    return addr
+
+def collect_local_addrs(lib, blacklist):
+    local = set()
+    if args.local:
+        for key in lib.local_functions.keys():
+            if key >= 0xffffffff:
+                continue
+            if key not in blacklist:
+                value = lib.local_users.get(key, [])
+                if not value and lib.ranges[key] > 0:
+                    local.add((key, lib.ranges[key]))
+            else:
+                print("Local in blacklist: " + str(key))
+    return local
+
 def proc():
 
     # get all unused symbol addresses
@@ -81,36 +117,15 @@ def proc():
             print('dynsym table not found in File!')
             continue
 
-        # get all blacklistet functions created by test script
-        blacklist = []
-
-        blacklist_file = "blacklist_" + os.path.basename(lib.fullname)
-        if os.path.exists(blacklist_file):
-            print("Found blacklist file for: " + os.path.basename(lib.fullname))
-            with open(blacklist_file, "r") as file:
-                blacklist_s = file.readlines()
-            blacklist = [int(x.strip(), 10) for x in blacklist_s]
+        # get all blacklisted functions created by test script
+        blacklist = read_blacklist(lib)
 
         # get all functions to remove from library
-        addr = []
-        for key in store[lib.fullname].exported_addrs.keys():
-            if key not in blacklist:
-                value = store[lib.fullname].export_users[key]
-                if not value:
-                    addr.append(key)
+        addr = collect_exported_addrs(lib, blacklist)
 
         # collect and remove local functions
-        local = set()
-        if args.local:
-            for key in store[lib.fullname].local_functions.keys():
-                # TODO all keys double -> as string and int, why?
-                if isinstance(key, str):
-                    continue
-                if key not in blacklist:
-                    value = store[lib.fullname].local_users.get(key, [])
-                    if (not value and store[lib.fullname].ranges[key] > 0):
-                        local.add((key, store[lib.fullname].ranges[key]))
-        elf_rem.local_functions = local
+        elf_rem.local_functions = collect_local_addrs(lib, blacklist)
+        elf_rem.overwrite_local_functions()
 
         # collect the set of Symbols for given function addresses
         elf_rem.collect_symbols_in_dynsym(addrs=addr)
@@ -118,7 +133,7 @@ def proc():
             elf_rem.collect_symbols_in_symtab(names=elf_rem.get_dynsym_names())
 
         # Fix sizes in collection to remove nop-only gaps
-        elf_rem.fixup_function_ranges(lib, store[lib.fullname].ranges)
+        elf_rem.fixup_function_ranges(lib.fullname, lib.ranges)
 
         # display statistics
         if args.keep_files:
