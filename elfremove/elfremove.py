@@ -33,6 +33,8 @@ from elftools.elf.hash import ELFHashTable, GNUHashTable
 from elftools.elf.enums import ENUM_RELOC_TYPE_x64, ENUM_RELOC_TYPE_i386, \
     ENUM_DT_FLAGS, ENUM_DT_FLAGS_1
 from elftools.elf.constants import SH_FLAGS
+from elftools.common.utils import struct_parse, parse_cstring_from_stream
+from elftools.elf.gnuversions import GNUVerNeedSection, GNUVerDefSection
 from libdebuginfod import DebugInfoD
 
 class SectionWrapper:
@@ -44,9 +46,10 @@ class SectionWrapper:
 
 class SymbolWrapper:
 
-    def __init__(self, name, index, value, size, sec_version):
+    def __init__(self, name, index, name_offset, value, size, sec_version):
         self.name = name
         self.index = index
+        self.name_offset = name_offset
         self.value = value
         self.size = size
         self.sec_version = sec_version
@@ -74,6 +77,8 @@ class ELFRemove:
         self._rel_dyn = None
         self._elf_hash = None
         self._dynamic = None
+        self._dynstr = None
+        self._dynstr_ranges = []
         self._blacklist = ["_init", "_fini"]
         self._external_elf_fd = None
 
@@ -113,6 +118,9 @@ class ELFRemove:
             if sect.name == '.dynamic':
                 logging.debug('* Found \'DYNAMIC\' section!')
                 self._dynamic = SectionWrapper(sect, section_no, 0)
+            if sect.name == '.dynstr':
+                logging.debug('* Found \'DYNSTR\' section!')
+                self._dynstr = SectionWrapper(sect, section_no, 0)
             section_no += 1
 
         # Special case for wrong loader behaviour before glibc 2.23. Due to a
@@ -278,6 +286,9 @@ class ELFRemove:
                         logging.debug('* Found \'%sDYN\' section!', sec_out_name)
                         self._rel_dyn = SectionWrapper(self._build_relocation_section(sec_name + 'dyn', rel_dyn_off, rel_dyn_size, ent_size, sec_type), -1, 0)
 
+        if self._dynstr and self.dynsym:
+            self._parse_dynstr()
+
 
     def __del__(self):
         self._f.close()
@@ -349,23 +360,26 @@ class ELFRemove:
     def _set_section_info(self, section, value, subtract_from_orig=False):
         self._set_section_attribute(section, 'sh_info', value, subtract_from_orig)
 
-    def _write_dynamic_tag(self, target_tag, value, subtract_from_orig=False):
-        dynamic_section = self._dynamic.section
-        found_tag = [idx for idx, tag in enumerate(dynamic_section.iter_tags()) if tag['d_tag'] == target_tag]
-        if not found_tag:
-            return
-        f_off = dynamic_section._offset + found_tag[0] * dynamic_section._tagsize
-        self._f.seek(f_off)
-        raw_val = self._f.read(dynamic_section._tagsize)
-        if dynamic_section._tagsize == 8:
+    def _modify_dynamic_tag_at_index(self, index, value_modifier_function):
+        base_addr = self._dynamic.section._offset
+        offset = base_addr + index * self._dynamic.section._tagsize
+        self._f.seek(offset)
+        raw_val = self._f.read(self._dynamic.section._tagsize)
+        if self._dynamic.section._tagsize == 8:
             struct_string = self._endianness + 'iI'
         else:
             struct_string = self._endianness + 'qQ'
         tagno, old_val = struct.unpack(struct_string, raw_val)
-        new_val = old_val - value if subtract_from_orig else value
+        new_val = value_modifier_function(old_val)
         new_raw_val = struct.pack(struct_string, tagno, new_val)
-        self._f.seek(f_off)
+        self._f.seek(offset)
         self._f.write(new_raw_val)
+
+    def _write_dynamic_tag(self, target_tag, value, subtract_from_orig=False):
+        found_tag = [idx for idx, tag in enumerate(self._dynamic.section.iter_tags()) if tag['d_tag'] == target_tag]
+        if not found_tag:
+            return
+        self._modify_dynamic_tag_at_index(found_tag[0], lambda x: x - value if subtract_from_orig else value)
 
     def _shrink_dynamic_tag(self, target_tag, amount):
         return self._write_dynamic_tag(target_tag, amount, subtract_from_orig=True)
@@ -910,6 +924,164 @@ class ELFRemove:
     def remove_symbols_from_symtab(self, overwrite=False):
         return self.remove_from_section(self.symtab, self.collection_symtab, overwrite)
 
+    def _get_string_range(self, start):
+        size = len(parse_cstring_from_stream(self._f, self._dynstr.section['sh_offset'] + start))
+        return (start, start + size)
+
+    def _write_at_offset(self, offset, value):
+        self._f.seek(offset)
+        self._f.write(value)
+
+    def _struct_string(self, items):
+        return self._endianness + items
+
+    def _parse_dynstr(self):
+        if not self._dynstr:
+            return
+
+        group = set(['DT_SONAME', 'DT_NEEDED', 'DT_RPATH', 'DT_RUNPATH'])
+        for tag in self._dynamic.section.iter_tags():
+            if tag['d_tag'] in group:
+                self._dynstr_ranges.append(self._get_string_range(tag.entry.d_val))
+
+        for symbol in self.dynsym.section.iter_symbols():
+            self._dynstr_ranges.append(self._get_string_range(symbol.entry['st_name']))
+
+        def _add_aux_names(section, name_field):
+            for _, version_aux_iter in section.iter_versions():
+                for version_aux in version_aux_iter:
+                    aux_idx, end = self._get_string_range(version_aux[name_field])
+                    #if (aux_idx, end) in self._dynstr_ranges:
+                    #    print('aux name already in ranges')
+                    #    continue
+                    self._dynstr_ranges.append((aux_idx, end))
+
+        verdef = self._elffile.get_section_by_name('.gnu.version_d')
+        if verdef:
+            _add_aux_names(verdef, 'vda_name')
+        verneed = self._elffile.get_section_by_name('.gnu.version_r')
+        if verneed:
+            _add_aux_names(verneed, 'vna_name')
+
+        self._dynstr_ranges.sort()
+
+    def _build_new_dynstr(self, removed_symbols):
+        if not self._dynstr:
+            return None, None
+
+        dynstr_base = self._dynstr.section['sh_offset']
+
+        for idx, symbol in enumerate(removed_symbols):
+            name_idx, end = self._get_string_range(symbol.name_offset)
+            self._dynstr_ranges.remove((name_idx, end))
+
+        index_map = {}
+        out_bytes = b'\x00'
+        # Identity map empty string (== NULL symbol, empty string per ELF spec)
+        first_start, first_end = self._dynstr_ranges[0]
+        index_map[first_start] = first_start
+        last_start, last_end = first_start, first_end
+        for idx, (start, end) in enumerate(self._dynstr_ranges[1:]):
+            # If we already had this range, skip it
+            if start in index_map:
+                continue
+            prev_start, prev_end = self._dynstr_ranges[idx]
+            # If we have an overlap, preserve the overlap in the new layout. Note
+            # that the string has already been copied over as the list of ranges
+            # is sorted by start offset.
+            if start < prev_end:
+                assert(prev_end == end)
+                offset_in_string = start - prev_start
+                last_start += offset_in_string
+                index_map[start] = last_start
+                continue
+            # Otherwise, use the next slot
+            target_start = last_end + 1
+            index_map[start] = target_start
+            length = end - start
+
+            self._f.seek(self._dynstr.section['sh_offset'] + start)
+            out_bytes += self._f.read(length + 1)
+
+            last_start = target_start
+            last_end = target_start + length
+
+        return out_bytes, index_map
+
+    def _fix_version_structs(self, section, section_struct, aux_struct, index_map):
+        if isinstance(section, GNUVerNeedSection):
+            v_aux, v_cnt, v_next = 'vn_aux', 'vn_cnt', 'vn_next'
+            va_name, va_next = 'vna_name', 'vna_next'
+            aux_name_offset = 8
+        elif isinstance(section, GNUVerDefSection):
+            v_aux, v_cnt, v_next = 'vd_aux', 'vd_cnt', 'vd_next'
+            va_name, va_next = 'vda_name', 'vda_next'
+            aux_name_offset = 0
+
+        entry_offset = section['sh_offset']
+        for _ in range(section.num_versions()):
+            entry = struct_parse(section_struct, self._f, entry_offset)
+            if isinstance(section, GNUVerNeedSection):
+                old_file = entry['vn_file']
+                new_value = index_map[old_file]
+                self._write_at_offset(entry_offset + 4,
+                                      struct.pack(self._struct_string('I'), new_value))
+
+            aux_offset = entry_offset + entry[v_aux]
+            for _ in range(entry[v_cnt]):
+                entry_aux = struct_parse(aux_struct, self._f, aux_offset)
+                old_idx = entry_aux[va_name]
+                new_value = index_map[old_idx]
+                self._write_at_offset(aux_offset + aux_name_offset,
+                                      struct.pack(self._struct_string('I'), new_value))
+                aux_offset += entry_aux[va_next]
+            entry_offset += entry[v_next]
+
+    def _compact_dynstr(self, removed_symbols):
+        if not self._dynstr:
+            return
+        # Create the mapping of old to new strings
+        new_bytes, index_map = self._build_new_dynstr(removed_symbols)
+
+        # Fix st_name fields for all symbols in new .dynsym
+        symsize = self._elffile.structs.Elf_Sym.sizeof()
+        dynsym_offset = self.dynsym.section['sh_offset']
+        for idx, symbol in enumerate(self.dynsym.section.iter_symbols()):
+            cur_name_idx = symbol.entry['st_name']
+            new_idx = index_map[cur_name_idx]
+            logging.debug('moving string for %s from %d to %d', symbol.name,
+                          cur_name_idx, new_idx)
+            # Write new index to offset of current symbol (st_name is the first
+            # member of Elf_Sym)
+            self._write_at_offset(dynsym_offset + idx * symsize,
+                                  struct.pack(self._struct_string('I'), new_idx))
+
+        # Fixup indices in DT_SONAME and DT_NEEDED tags
+        group = ('DT_SONAME', 'DT_NEEDED', 'DT_RPATH', 'DT_RUNPATH')
+        for idx, tag in enumerate(self._dynamic.section.iter_tags()):
+            if tag['d_tag'] not in group:
+                continue
+            self._modify_dynamic_tag_at_index(idx, lambda x: index_map[x])
+
+        # Fix indices in GNU version dependency section
+        verneed = self._elffile.get_section_by_name('.gnu.version_r')
+        if verneed:
+            self._fix_version_structs(verneed, self._elffile.structs.Elf_Verneed,
+                                      self._elffile.structs.Elf_Vernaux, index_map)
+        # Fix indices in GNU version definition section
+        verdef = self._elffile.get_section_by_name('.gnu.version_d')
+        if verdef:
+            self._fix_version_structs(verdef, self._elffile.structs.Elf_Verdef,
+                                      self._elffile.structs.Elf_Verdaux, index_map)
+
+        # Write out .dynstr section and fix section header table and dynamic tag
+        self._write_at_offset(self._dynstr.section['sh_offset'],
+                              self._dynstr.section['sh_size'] * b'\x00')
+        self._write_at_offset(self._dynstr.section['sh_offset'], new_bytes)
+        self._set_section_size(self._dynstr, len(new_bytes))
+        self._write_dynamic_tag('DT_STRSZ', len(new_bytes))
+
+
     '''
     Function:   remove_from_section
     Parameter:  section     = section tuple (self.dynsym, self.symtab)
@@ -983,6 +1155,8 @@ class ELFRemove:
                                   is_symtab=(section.section.name == '.symtab'))
         if section.section.name == '.dynsym':
             self.dynsym = section
+            logging.info('* compacting .dynstr string table')
+            self._compact_dynstr(sorted_list)
             logging.info('* adapting PLT relocation entries')
             self._batch_remove_relocs(sorted_list, self._rel_plt)
             logging.info('* rebuilding ELF-style hashes')
@@ -1042,7 +1216,7 @@ class ELFRemove:
                     continue
                 # add all symbols to remove to the return list
                 # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
-                found_symbols.append(SymbolWrapper(symbol.name, entry_cnt,
+                found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol['st_name'],
                                                    start_address, size,
                                                    section.version))
         return found_symbols
@@ -1068,7 +1242,7 @@ class ELFRemove:
                     continue
                 # add all symbols to remove to the return list
                 # format (name, offset_in_table, start_of_code, size_of_code, section_revision)
-                found_symbols.append(SymbolWrapper(symbol.name, entry_cnt,
+                found_symbols.append(SymbolWrapper(symbol.name, entry_cnt, symbol['st_name'],
                                                    start_address, size,
                                                    section.version))
         return found_symbols
