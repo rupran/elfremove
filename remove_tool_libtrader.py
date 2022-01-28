@@ -21,7 +21,7 @@
 import sys
 import os
 import argparse
-from shutil import copyfile
+import shutil
 import logging
 import subprocess
 import tempfile
@@ -177,7 +177,7 @@ def proc():
 
         # copy library to folder
         if not os.path.exists(filename):
-            copyfile(lib.fullname, filename)
+            shutil.copy(lib.fullname, filename)
         else:
             print("Library \'" + filename + "\' already exists! Ignoring!")
             continue
@@ -260,7 +260,7 @@ def proc():
             print("Caught exception!")
             traceback.print_exc()
             if args.overwrite:
-                copyfile(filename, lib.fullname)
+                shutil.copy(filename, lib.fullname)
             else:
                 os.remove(filename)
             print(e)
@@ -269,7 +269,7 @@ def proc():
             print("Keyboard Interrupt!")
             traceback.print_exc()
             if args.overwrite:
-                copyfile(filename, lib.fullname)
+                shutil.copy(filename, lib.fullname)
             else:
                 os.remove(filename)
             sys.exit(1)
