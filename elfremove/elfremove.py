@@ -64,7 +64,7 @@ class ELFRemove:
     Description: Is automatically called on object creation.
              Opens the given library and searches for the requiered sections.
     '''
-    def __init__(self, filename, open_mode='r+b'):
+    def __init__(self, filename, open_mode='r+b', external_symtab_file=None):
         self._f = open(filename, open_mode, buffering=0)
         self._elffile = ELFFile(self._f)
         self._byteorder = 'little' if self._elffile.little_endian else 'big'
@@ -190,6 +190,9 @@ class ELFRemove:
                         paths.insert(0, os.path.join(external_buildid_dir,
                                                     build_id[:2],
                                                     build_id[2:] + '.debug'))
+            if external_symtab_file:
+                paths.insert(0, external_symtab_file)
+
             for path in paths:
                 if not os.path.isfile(path):
                     logging.debug('search for external symtab: no path %s', path)

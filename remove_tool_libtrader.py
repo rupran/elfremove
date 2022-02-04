@@ -182,6 +182,11 @@ def proc():
             print("Library \'" + filename + "\' already exists! Ignoring!")
             continue
 
+        # Get path to external debug file if the library saved it
+        external_symtab_file = None
+        if hasattr(lib, 'external_debug_file'):
+            external_symtab_file = lib.external_debug_file
+
         # Strip debug information to a temporary directory
         extract_debuginfo(debuginfo_tempdir, filename, lib)
 
@@ -199,7 +204,7 @@ def proc():
             else:
                 continue
         else:
-            elf_rem = ELFRemove(filename)
+            elf_rem = ELFRemove(filename, external_symtab_file=external_symtab_file)
 
         if elf_rem.dynsym is None:
             print('dynsym table not found in File!')
