@@ -1073,7 +1073,7 @@ class ELFRemove:
         for idx, symbol in enumerate(self.dynsym.section.iter_symbols()):
             cur_name_idx = symbol.entry['st_name']
             new_idx = index_map[cur_name_idx]
-            logging.debug('moving string for %s from %d to %d', symbol.name,
+            logging.debug(' * moving string for %s from %d to %d', symbol.name,
                           cur_name_idx, new_idx)
             # Write new index to offset of current symbol (st_name is the first
             # member of Elf_Sym)
@@ -1149,8 +1149,8 @@ class ELFRemove:
                 raise Exception('symbol_collection was generated for older revision of ' \
                                 + section.section.name)
             #### Delete Symbol Table entry ####
-            logging.debug(' * %s: deleting table entry', symbol_t.name)
             if section.index != -1:
+                logging.debug(' * %s: deleting table entry', symbol_t.name)
                 section_entries.pop(symbol_t.index)
 
             #### Overwrite function with zeros ####
