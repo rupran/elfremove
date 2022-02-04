@@ -31,6 +31,7 @@ import traceback
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), '../librarytrader'))
 
 from librarytrader.librarystore import LibraryStore
+from librarytrader.library import Library
 from elfremove.elfremove import ELFRemove
 
 parser = argparse.ArgumentParser(description='Remove unneccessary symbols of given librarys.')
@@ -166,8 +167,7 @@ def proc():
 
         filename = directory + lib.fullname
 
-        if not os.path.isdir(os.path.dirname(filename)):
-            os.makedirs(os.path.dirname(filename))
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
 
         if not args.overwrite:
             print("\nTailoring library: " + filename)
@@ -278,6 +278,18 @@ def proc():
             else:
                 os.remove(filename)
             sys.exit(1)
+
+    # Copy over symlinks
+    for key, value in store.items():
+        if isinstance(value, Library):
+            continue
+        link_name = os.path.normpath(directory + key)
+        points_to = os.path.normpath(directory + value)
+        dirs_up_to_root = link_name.count('/') - 1
+        points_to = os.path.normpath('../' * dirs_up_to_root + value)
+
+        os.makedirs(os.path.dirname(link_name), exist_ok=True)
+        os.symlink(points_to, link_name)
 
     # filename, dynsym size before, code size before, number of exports before,
     # number of local before, code size after, global functions after,
