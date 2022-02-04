@@ -82,8 +82,8 @@ class ELFRemove:
         self._blacklist = ["_init", "_fini"]
         self._external_elf_fd = None
 
-        self.collection_dynsym = None
-        self.collection_symtab = None
+        self.collection_dynsym = []
+        self.collection_symtab = []
         self.local_functions = set()
 
         #### check for supported architecture ####
@@ -595,7 +595,7 @@ class ELFRemove:
         while cur_idx < list_len:
             reloc = reloc_list[cur_idx]
             r_info_sym = reloc.entry['r_info_sym']
-            if (not is_symtab and r_info_sym == sym_nr) or getter_addend(reloc) == sym_addr:
+            if (not is_symtab and r_info_sym == sym_nr) or (getter_addend(reloc) == sym_addr and sym_addr > 0):
                 logging.debug('   * found: relocation offset = %x, removing', reloc.entry['r_offset'])
                 if push:
                     reloc_list.pop(cur_idx)
@@ -789,6 +789,17 @@ class ELFRemove:
         self._set_section_size(self._elf_hash,
                                (2 + params['nchains'] + params['nbuckets']) * 4)
 
+    def _check_gnu_hashtable_consistency(self):
+        check_hash_table = GNUHashTable(self._elffile,
+                                        self._gnu_hash.section['sh_offset'],
+                                        self.dynsym.section)
+        for symbol in self.dynsym.section.iter_symbols():
+            if symbol.entry['st_shndx'] == 'SHN_UNDEF':
+                continue
+            retval = check_hash_table.get_symbol(symbol.name)
+            if retval is None:
+                logging.warning('symbol %s not found in hashtable', symbol.name)
+
     def _batch_remove_gnu_hashtable(self, symbol_list, dynsym_size):
         if self._gnu_hash is None:
             return
@@ -809,12 +820,21 @@ class ELFRemove:
         params['chains'] = list(struct.unpack(self._endianness + str(nchains) + 'I',
                                               self._f.read(nchains * 4)))
 
-        func_hashes = [self._gnuhash(symbol.name) for symbol in symbol_list]
+        # Split removed symbols into SHN_UNDEF and locally present symbols
+        undef_symbols = []
+        defined_symbols = []
+        for symbol in symbol_list:
+            (undef_symbols if symbol.value == 0 and symbol.size == 0 else defined_symbols).append(symbol)
+
+        if len(undef_symbols):
+            logging.debug(' * adapting hashtable with undefined symbols: %s',
+                          [x.name for x in undef_symbols])
+        func_hashes = [self._gnuhash(symbol.name) for symbol in defined_symbols]
         func_buckets = [func_hash % params['nbuckets'] for func_hash in func_hashes]
         if sorted(func_buckets, reverse=True) != func_buckets:
             raise Exception("bucket numbers of symbols to be deleted are not sorted!")
 
-        for idx, symbol in enumerate(symbol_list):
+        for idx, symbol in enumerate(defined_symbols):
             logging.debug('\t%s: adjust gnu_hash_section, hash = %x bucket = %d',
                           symbol.name, func_hashes[idx], func_buckets[idx])
             self._edit_gnu_hashtable(symbol.index, func_hashes[idx], params)
@@ -826,7 +846,7 @@ class ELFRemove:
         # currently checked one.
         max_idx = params['nbuckets'] - 1
         cur_sym = 0
-        num_earlier_removed_symbols = len(symbol_list)
+        num_earlier_removed_symbols = len(defined_symbols)
         while max_idx >= 0:
             while num_earlier_removed_symbols > 0 and func_buckets[cur_sym] >= max_idx:
                 cur_sym += 1
@@ -839,10 +859,20 @@ class ELFRemove:
         # Set last entries in buckets array to 0 if all symbols for the last
         # buckets have been deleted from the file.
         max_idx = params['nbuckets'] - 1
-        while params['buckets'][max_idx] == dynsym_size - len(symbol_list):
+        while params['buckets'][max_idx] == dynsym_size - len(defined_symbols):
             params['buckets'][max_idx] = 0
             max_idx -= 1
 
+        # Factor out removed SHN_UNDEF symbols. Their removal moves all buckets
+        # forward (as UNDEF always come first in .dynsym) and reduces the offset
+        # to the first hashed symbol in the symbol table.
+        for idx, bucket in enumerate(params['buckets']):
+            params['buckets'][idx] = max(0, params['buckets'][idx] - len(undef_symbols))
+        params['symoffset'] -= len(undef_symbols)
+
+        # Write symoffset value
+        self._f.seek(sh_offset + 4)
+        self._f.write(struct.pack(self._endianness + 'I', params['symoffset']))
         # Write out buckets
         self._f.seek(bucket_start)
         buckets_bytes = struct.pack(self._endianness + str(params['nbuckets']) + 'I',
@@ -854,18 +884,9 @@ class ELFRemove:
                                    *params['chains'])
         self._f.write(chains_bytes + (nchains - len(params['chains'])) * 4 * b'\00')
 
-        self._change_section_size(self._gnu_hash, len(symbol_list) * 4)
+        self._change_section_size(self._gnu_hash, len(defined_symbols) * 4)
 
-        #check_hash_table = GNUHashTable(self._elffile,
-        #                                self._gnu_hash.section['sh_offset'],
-        #                                self.dynsym.section)
-        #for symbol in self.dynsym.section.iter_symbols():
-        #    if symbol.entry['st_shndx'] == 'SHN_UNDEF':
-        #        continue
-        #    retval = check_hash_table.get_symbol(symbol.name)
-        #    if retval is None:
-        #        raise(Exception, 'symbol {} not found in hashtable!'.format(symbol.name))
-
+        #self._check_gnu_hashtable_consistency()
 
     '''
     Function:   _edit_gnu_hashtable
@@ -1282,6 +1303,8 @@ class ELFRemove:
         global_dict = {}
         local_dict = {}
         for x in self.collection_dynsym:
+            if x.value == 0 and x.size == 0:
+                continue
             global_dict[x.value] = max(global_dict.get(x.value, 0), x.size)
         if self.local_functions:
             for start, size in self.local_functions:
@@ -1364,6 +1387,8 @@ class ELFRemove:
         # create dictionary to ensure no double values
         addr_dict = {}
         for ent in self.collection_dynsym:
+            if ent.value == 0 and ent.size == 0:
+                continue
             addr_dict[ent.value] = ent.size
         if self.local_functions:
             for func in self.local_functions:

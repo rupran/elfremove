@@ -42,6 +42,7 @@ parser.add_argument('--libonly', action="store_true", help='name of binary has t
 parser.add_argument('--overwrite', action="store_true", help='overwrite original library files, otherwise work with a copy in the current working directory')
 parser.add_argument('--addr_list', action="store_true", help='print list of removed locations (addresses) with size')
 parser.add_argument('--keep_files', action="store_true", help='generate keep files for shrinkelf')
+parser.add_argument('--remove_unused_imports', action="store_true", help='remove SHN_UNDEF entries in .dynsym which are not referenced by any function')
 parser.add_argument('-v', '--verbose', action="store_true", help='set verbosity')
 parser.add_argument('--debug', action="store_true", help=argparse.SUPPRESS)
 
@@ -225,6 +226,19 @@ def proc():
         elf_rem.collect_symbols_in_dynsym(addrs=addr)
         if elf_rem.symtab is not None:
             elf_rem.collect_symbols_in_symtab(names=elf_rem.get_dynsym_names())
+
+        if args.remove_unused_imports:
+            # Collect all unused (referenced from used functions) imported
+            # functions. Their entries can be removed from the symbol table as well.
+            used_imports = set()
+            for addr, callees in lib.external_calls.items():
+                if (addr in lib.export_users and lib.export_users[addr]) or \
+                        (addr in lib.local_users and lib.local_users[addr]):
+                    used_imports.update(callees)
+            unused_imports = set(lib.imports.keys()) - used_imports
+            unused_imports = set([x.split('@@')[0] for x in unused_imports])
+            collection = elf_rem.collect_symbols_by_name(elf_rem.dynsym, unused_imports)
+            elf_rem.collection_dynsym.extend(collection)
 
         # Store number of dynsym entries before shrinking
         prev_dynsym_entries = (elf_rem.dynsym.section.header['sh_size'] //
