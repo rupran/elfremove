@@ -824,7 +824,10 @@ class ELFRemove:
         undef_symbols = []
         defined_symbols = []
         for symbol in symbol_list:
-            (undef_symbols if symbol.value == 0 and symbol.size == 0 else defined_symbols).append(symbol)
+            (undef_symbols if symbol.value == 0 and \
+                              symbol.size == 0 and \
+                              symbol.index < params['symoffset'] \
+             else defined_symbols).append(symbol)
 
         if len(undef_symbols):
             logging.debug(' * adapting hashtable with undefined symbols: %s',
@@ -864,8 +867,11 @@ class ELFRemove:
             max_idx -= 1
 
         # Factor out removed SHN_UNDEF symbols. Their removal moves all buckets
-        # forward (as UNDEF always come first in .dynsym) and reduces the offset
-        # to the first hashed symbol in the symbol table.
+        # forward (as the symoffset parameter describes the first n SHN_UNDEF
+        # symbols in .dynsym) and reduces the offset to hashed symbols in the
+        # symbol table. Note that the symbol table can also contain SHN_UNDEF
+        # symbols later but these are removed via the defined_symbols loop
+        # above.
         for idx, bucket in enumerate(params['buckets']):
             params['buckets'][idx] = max(0, params['buckets'][idx] - len(undef_symbols))
         params['symoffset'] -= len(undef_symbols)
