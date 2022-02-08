@@ -303,6 +303,10 @@ def proc():
         points_to = os.path.normpath('../' * dirs_up_to_root + value)
 
         os.makedirs(os.path.dirname(link_name), exist_ok=True)
+        if os.path.islink(link_name):
+            print('Symbolic link {} already exists!'.format(link_name))
+            continue
+
         os.symlink(points_to, link_name)
 
     # filename, dynsym size before, code size before, number of exports before,
