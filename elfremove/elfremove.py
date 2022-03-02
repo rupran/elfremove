@@ -78,7 +78,7 @@ class ELFRemove:
         self._elf_hash = None
         self._dynamic = None
         self._dynstr = None
-        self._dynstr_ranges = []
+        self._dynstr_ranges = collections.defaultdict(int)
         self._blacklist = ["_init", "_fini"]
         self._external_elf_fd = None
 
@@ -972,10 +972,10 @@ class ELFRemove:
         group = set(['DT_SONAME', 'DT_NEEDED', 'DT_RPATH', 'DT_RUNPATH'])
         for tag in self._dynamic.section.iter_tags():
             if tag['d_tag'] in group:
-                self._dynstr_ranges.append(self._get_string_range(tag.entry.d_val))
+                self._dynstr_ranges[self._get_string_range(tag.entry.d_val)] += 1
 
         for symbol in self.dynsym.section.iter_symbols():
-            self._dynstr_ranges.append(self._get_string_range(symbol.entry['st_name']))
+            self._dynstr_ranges[self._get_string_range(symbol.entry['st_name'])] += 1
 
         def _add_aux_names(section, name_field):
             for _, version_aux_iter in section.iter_versions():
@@ -984,7 +984,7 @@ class ELFRemove:
                     #if (aux_idx, end) in self._dynstr_ranges:
                     #    print('aux name already in ranges')
                     #    continue
-                    self._dynstr_ranges.append((aux_idx, end))
+                    self._dynstr_ranges[(aux_idx, end)] += 1
 
         verdef = self._elffile.get_section_by_name('.gnu.version_d')
         if verdef:
@@ -992,8 +992,6 @@ class ELFRemove:
         verneed = self._elffile.get_section_by_name('.gnu.version_r')
         if verneed:
             _add_aux_names(verneed, 'vna_name')
-
-        self._dynstr_ranges.sort()
 
     def _build_new_dynstr(self, removed_symbols):
         if not self._dynstr:
@@ -1003,19 +1001,22 @@ class ELFRemove:
 
         for idx, symbol in enumerate(removed_symbols):
             name_idx, end = self._get_string_range(symbol.name_offset)
-            self._dynstr_ranges.remove((name_idx, end))
+            self._dynstr_ranges[(name_idx, end)] -= 1
+            if self._dynstr_ranges[(name_idx, end)] == 0:
+                del self._dynstr_ranges[(name_idx, end)]
 
         index_map = {}
         out_bytes = b'\x00'
+        sorted_dynstr_ranges = sorted(self._dynstr_ranges.keys())
         # Identity map empty string (== NULL symbol, empty string per ELF spec)
-        first_start, first_end = self._dynstr_ranges[0]
+        first_start, first_end = sorted_dynstr_ranges[0]
         index_map[first_start] = first_start
         last_start, last_end = first_start, first_end
-        for idx, (start, end) in enumerate(self._dynstr_ranges[1:]):
+        for idx, (start, end) in enumerate(sorted_dynstr_ranges[1:]):
             # If we already had this range, skip it
             if start in index_map:
                 continue
-            prev_start, prev_end = self._dynstr_ranges[idx]
+            prev_start, prev_end = sorted_dynstr_ranges[idx]
             # If we have an overlap, preserve the overlap in the new layout. Note
             # that the string has already been copied over as the list of ranges
             # is sorted by start offset.
