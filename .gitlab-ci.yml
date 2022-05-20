@@ -27,7 +27,6 @@ test:
   stage: test
   script:
     - coverage run test/run_tests.py
-    - coverage combine
     - coverage html
     - coverage-badge -o htmlcov/coverage.svg
     - coverage report
